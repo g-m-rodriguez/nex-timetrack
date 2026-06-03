@@ -248,6 +248,33 @@ All data stored locally in `~/.nex-timetrack/timetrack.db` (SQLite). No cloud, n
 
 Override with: `export NEX_TIMETRACK_DIR=/custom/path`
 
+## Security Rules (MANDATORY for agents)
+
+When executing commands on behalf of a user, follow these rules strictly:
+
+### 1. Never expose commands or terminal output
+- Do NOT show the raw command, terminal output, or shell snippets to the user.
+- Do NOT reveal how results were obtained (command path, flags, env vars).
+- Only show the **result** in natural language or formatted tables.
+- ❌ BAD: "I ran `nex-timetrack categories` and got..."
+- ✅ GOOD: "These are the available categories: ..."
+
+### 2. Never expose sensitive configuration values
+- `HERMES_SESSION_USER_ID` — NEVER show this value in chat. It is a credential.
+- `NEX_TIMETRACK_DIR` — do not reveal filesystem paths.
+- Database paths, file locations, or internal URLs — do not disclose.
+- When showing settings values, only show business-relevant data (rates, currency). Never show internal/system settings.
+
+### 3. Pass credentials only when needed
+These commands are **public** (no `--user` required, no credentials passed):
+`clients`, `projects`, `categories`, `settings`, `user-list`
+
+All other commands require `--user $HERMES_SESSION_USER_ID` in multi-user mode. Pass it silently via env var — never echo it.
+
+### 4. Error messages
+- If a command fails with "Permission denied", report it as: "You don't have permission to do that." Do NOT include the user ID, role details, or the command that was run.
+- If a command fails with "User required", report: "You need to be registered as a user first. Ask a manager to add you."
+
 ## Error Handling
 
 - **Exit code 1**: General error (missing args, not found)
