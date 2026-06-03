@@ -4,9 +4,6 @@
 
 CLI de time tracking para freelancers y agencias. Sin dependencias externas — Python 3.8+ stdlib + SQLite. Almacenamiento local, sin telemetría, sin cloud.
 
-**Autor**: Nex AI (Kevin Blancaflor)
-**Licencia**: MIT-0 (ClawHub) / AGPL-3.0 (GitHub)
-**Versión**: 1.0.0
 
 ---
 

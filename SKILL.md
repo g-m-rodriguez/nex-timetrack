@@ -3,9 +3,9 @@ name: Nex Timetrack
 description: Billable time logger for freelancers and agencies. Start/stop timers or log manually. Client and project management, rate cascading, 15-minute rounding, billing summaries, full-text search, CSV/JSON export. Python stdlib only, SQLite storage.
 version: 1.0.0
 metadata:
-  author: Nex AI (Kevin Blancaflor)
+  author: 
   license: MIT-0
-  website: https://nex-ai.be
+  website: 
   clawdbot:
     keywords:
       - time tracking
@@ -34,10 +34,6 @@ metadata:
       - client billing
       - project hours
       - timesheet
-      - invoice summary
-      - uren bijhouden
-      - tijd loggen
-      - factureerbare uren
 ---
 
 # Nex Timetrack
@@ -147,8 +143,3 @@ nex-timetrack export csv --client "Lux Interiors" --billable
 All data stored locally in `~/.nex-timetrack/timetrack.db` (SQLite). No cloud, no telemetry.
 
 Override with: `export NEX_TIMETRACK_DIR=/custom/path`
-
-## License
-
-MIT-0 on ClawHub (free for any use).
-AGPL-3.0 on GitHub (commercial licenses via info@nex-ai.be).

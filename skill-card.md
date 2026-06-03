@@ -3,9 +3,6 @@ Nex Timetrack helps freelancers and agencies track billable time with live timer
 
 This skill is ready for commercial/non-commercial use. <br>
 
-## Publisher: <br>
-[nexaiguy](https://clawhub.ai/user/nexaiguy) <br>
-
 ### License/Terms of Use: <br>
 MIT-0 <br>
 
@@ -23,12 +20,6 @@ Risk: Custom export paths can write outside the skill's own folder and may overw
 Mitigation: Use the default export location unless the destination path is known and safe. <br>
 Risk: Deleting or editing entries can affect records used for billing. <br>
 Mitigation: Back up the local SQLite database before destructive changes or before relying on it for invoicing. <br>
-
-
-## Reference(s): <br>
-- [Nex Timetrack ClawHub release](https://clawhub.ai/nexaiguy/nex-timetrack) <br>
-- [Nex AI website](https://nex-ai.be) <br>
-
 
 ## Skill Output: <br>
 **Output Type(s):** [Text, Markdown, Shell commands, Configuration, Files] <br>
