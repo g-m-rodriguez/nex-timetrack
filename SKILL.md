@@ -1,11 +1,11 @@
 ---
 name: Nex Timetrack
-description: Billable time logger for freelancers and agencies. Start/stop timers or log manually. Client and project management, rate cascading, 15-minute rounding, billing summaries, full-text search, CSV/JSON export. Python stdlib only, SQLite storage.
-version: 1.0.0
+description: Billable time logger for teams, freelancers and agencies. Multi-user with roles (manager/timekeeper/collaborator), client/project assignments, external ticket references (JIRA/AzureDevOps), configurable settings and categories, rate cascading, billing summaries, full-text search, CSV/JSON export. Python stdlib only, SQLite storage.
+version: 2.0.0
 metadata:
-  author: Nex AI (Kevin Blancaflor)
+  author: 
   license: MIT-0
-  website: https://nex-ai.be
+  website: 
   clawdbot:
     keywords:
       - time tracking
@@ -20,6 +20,11 @@ metadata:
       - hourly rate
       - project time
       - client hours
+      - multi-user
+      - team time tracking
+      - JIRA
+      - AzureDevOps
+      - ticket reference
       - urenregistratie
       - tijdregistratie
       - facturatie
@@ -27,7 +32,6 @@ metadata:
     triggers:
       - track time
       - log hours
-      - start timer
       - billable hours
       - time entry
       - how long did I work
@@ -35,6 +39,9 @@ metadata:
       - project hours
       - timesheet
       - invoice summary
+      - external ticket
+      - JIRA ticket
+      - team summary
       - uren bijhouden
       - tijd loggen
       - factureerbare uren
@@ -42,7 +49,7 @@ metadata:
 
 # Nex Timetrack
 
-Billable time logger built for freelancers and agencies. Track time with a live timer or log entries manually. Manage clients, projects, and rates. Generate billing summaries with optional 15-minute rounding.
+Billable time logger for teams, freelancers and agencies. Multi-user support with role-based permissions. Log time with external ticket references (JIRA, AzureDevOps, GitHub). Manage clients, projects, rates, and settings via DB. Generate billing summaries with configurable rounding.
 
 ## Requirements
 
@@ -56,31 +63,109 @@ Billable time logger built for freelancers and agencies. Track time with a live 
 bash setup.sh
 ```
 
+## User Identification
+
+In multi-user mode, pass `--user <user_id>` or set `HERMES_SESSION_USER_ID` environment variable. The user_id should match the Mattermost user ID.
+
+```bash
+# Via flag
+nex-timetrack log "Task" 2h --user abc123 --client "Acme" --project "Web" --external-id "JIRA-456"
+
+# Via environment variable (recommended for Mattermost)
+export HERMES_SESSION_USER_ID=abc123
+nex-timetrack log "Task" 2h --client "Acme" --project "Web" --external-id "JIRA-456"
+```
+
 ## Commands
+
+### Time Tracking
 
 | Command | What it does |
 |---------|-------------|
-| `start` | Start a live timer |
-| `stop` | Stop timer and save entry |
-| `status` | Show running timer |
-| `cancel` | Cancel timer without saving |
-| `log` | Log time manually |
+| `log` | Log time manually (primary command in multi-user) |
 | `show` | Show entry details |
-| `list` | List entries with filters |
+| `list` | List entries with filters (client, project, external-id, date range) |
 | `edit` | Edit an entry |
 | `delete` | Delete an entry |
-| `search` | Full-text search entries |
+| `search` | Full-text search entries (includes external IDs) |
+
+### Timer (deprecated in multi-user)
+
+| Command | What it does |
+|---------|-------------|
+| `start` | Start a live timer (single-user only) |
+| `stop` | Stop timer and save entry (single-user only) |
+| `status` | Show running timer (single-user only) |
+| `cancel` | Cancel timer without saving (single-user only) |
+
+### Client & Project Management (manager only)
+
+| Command | What it does |
+|---------|-------------|
 | `client-add` | Add a client with rate |
 | `clients` | List all clients |
 | `project-add` | Add a project |
 | `projects` | List all projects |
-| `summary` | Billing summary with totals |
-| `stats` | Usage statistics |
+
+### User Management (manager only)
+
+| Command | What it does |
+|---------|-------------|
+| `user-add` | Register a user |
+| `user-list` | List users with roles |
+| `role-add` | Assign role to user |
+| `role-remove` | Remove role from user |
+| `assign` | Assign user to client/project |
+| `unassign` | Remove user assignment |
+| `assignments` | List assignments |
+
+### Settings (manager only for changes)
+
+| Command | What it does |
+|---------|-------------|
+| `settings` | List all settings |
+| `setting-get` | Get a setting value |
+| `setting-set` | Update a setting (manager only) |
+| `categories` | List categories |
+| `category-add` | Add a category (manager only) |
+| `category-remove` | Deactivate a category (manager only) |
+
+### Reporting & Export
+
+| Command | What it does |
+|---------|-------------|
+| `summary` | Billing summary with totals (`--team` for all users) |
+| `stats` | Usage statistics (scoped by role) |
 | `export` | Export to JSON or CSV |
+
+## Required Fields in Multi-User
+
+When logging time in multi-user mode, these fields are required for collaborators:
+- `--client` — client name
+- `--project` — project name
+- `--external-id` — external ticket reference (JIRA, AzureDevOps, GitHub issue, etc.)
+- `description` — what was done
+- `duration` — time spent
+
+## Roles & Permissions
+
+| Action | Manager | Timekeeper | Collaborator |
+|--------|---------|------------|--------------|
+| Log time | ✅ any client/project | ❌ | ✅ assigned only |
+| View entries | ✅ all | ✅ all | ✅ own only |
+| Edit/delete entries | ✅ any | ❌ | ✅ own only |
+| Summary (team) | ✅ | ✅ | ❌ |
+| Summary (own) | ✅ | ✅ | ✅ |
+| Search | ✅ all | ✅ all | ✅ own only |
+| Export | ✅ all | ✅ all | ✅ own only |
+| Add clients/projects | ✅ | ❌ | ❌ |
+| Manage users/roles | ✅ | ❌ | ❌ |
+| Manage settings/categories | ✅ | ❌ | ❌ |
+| View clients/projects | ✅ | ✅ | ✅ |
 
 ## Rate Cascade
 
-Rates resolve in this order: entry rate > project rate > client rate > default (85 EUR/h). Set rates at whatever level makes sense for your billing.
+Rates resolve in this order: entry rate > project rate > client rate > default rate (configurable via `setting-set default_rate`). Set rates at whatever level makes sense for your billing.
 
 ## Duration Format
 
@@ -90,56 +175,71 @@ When logging manually, use any of these:
 - `1h30m` = 1 hour 30 minutes
 - `1.5` = 1.5 hours
 
+## Configurable Settings
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `default_rate` | 85.00 | Default hourly rate (EUR) |
+| `currency` | EUR | Currency code |
+| `currency_symbol` | € | Display symbol |
+| `round_to_minutes` | 15 | Rounding block for invoicing |
+
 ## Tone Guide
 
 This skill responds to natural language through ClawdBot. Example interactions:
 
-**Starting a timer:**
-> "Start tracking time for the Bakkerij Peeters redesign"
+**Bootstrap (first user setup):**
+> "Set up timetrack for the team"
 ```bash
-nex-timetrack start "Bakkerij Peeters redesign" --client "Bakkerij Peeters" --category development
+nex-timetrack user-add mm-alice --name "Alice Manager"
+nex-timetrack role-add mm-alice manager
+nex-timetrack user-add mm-bob --name "Bob Dev" --user mm-alice
+nex-timetrack role-add mm-bob collaborator --user mm-alice
+nex-timetrack client-add "Acme Corp" --rate 90 --user mm-alice
+nex-timetrack project-add "Website" --client "Acme Corp" --user mm-alice
+nex-timetrack assign mm-bob --client "Acme Corp" --project "Website" --user mm-alice
 ```
 
-**Logging time manually:**
-> "Log 2 hours of design work for Lux Interiors yesterday"
+**Logging time with ticket reference:**
+> "Log 2 hours of development work on JIRA-1234 for Acme's website"
 ```bash
-nex-timetrack log "Homepage design" 2h --client "Lux Interiors" --category design --date 2026-04-05
+nex-timetrack log "API integration" 2h --client "Acme Corp" --project "Website" --external-id "JIRA-1234" --category development --user $HERMES_SESSION_USER_ID
 ```
 
-**Stopping the timer:**
-> "Stop the timer, I finished the API integration"
+**Billing summary for team:**
+> "How many hours did the team bill this month?"
 ```bash
-nex-timetrack stop --notes "Completed API integration for payment flow"
+nex-timetrack summary --team --date-from 2026-06-01 --user $HERMES_SESSION_USER_ID
 ```
 
-**Checking what's running:**
-> "Is my timer running?"
+**Looking up a ticket:**
+> "Show me all time logged against JIRA-1234"
 ```bash
-nex-timetrack status
-```
-
-**Billing summary for a client:**
-> "How many hours did I bill Bakkerij Peeters this month?"
-```bash
-nex-timetrack summary --client "Bakkerij Peeters" --date-from 2026-04-01 --round-up
+nex-timetrack list --external-id "JIRA-1234" --user $HERMES_SESSION_USER_ID
 ```
 
 **Weekly overview:**
 > "Show me this week's time entries"
 ```bash
-nex-timetrack list --date-from 2026-03-31 --date-to 2026-04-06
-```
-
-**Adding a client:**
-> "Add Bakkerij Peeters as a client at 95 per hour"
-```bash
-nex-timetrack client-add "Bakkerij Peeters" --rate 95 --email "jan@bakkerijpeeters.be"
+nex-timetrack list --date-from 2026-06-01 --date-to 2026-06-07 --user $HERMES_SESSION_USER_ID
 ```
 
 **Export for invoicing:**
-> "Export all billable hours for Lux Interiors as CSV"
+> "Export all billable hours for Acme as CSV"
 ```bash
-nex-timetrack export csv --client "Lux Interiors" --billable
+nex-timetrack export csv --client "Acme Corp" --user $HERMES_SESSION_USER_ID
+```
+
+**Adding a client:**
+> "Add Acme Corp as a client at 90 per hour"
+```bash
+nex-timetrack client-add "Acme Corp" --rate 90 --user $HERMES_SESSION_USER_ID
+```
+
+**Updating settings:**
+> "Change the default rate to 95 euros"
+```bash
+nex-timetrack setting-set default_rate 95 --user $HERMES_SESSION_USER_ID
 ```
 
 ## Storage
@@ -147,6 +247,12 @@ nex-timetrack export csv --client "Lux Interiors" --billable
 All data stored locally in `~/.nex-timetrack/timetrack.db` (SQLite). No cloud, no telemetry.
 
 Override with: `export NEX_TIMETRACK_DIR=/custom/path`
+
+## Error Handling
+
+- **Exit code 1**: General error (missing args, not found)
+- **Exit code 3**: Permission denied (wrong role, unassigned client)
+- **Exit code 130**: Interrupted (Ctrl+C)
 
 ## License
 

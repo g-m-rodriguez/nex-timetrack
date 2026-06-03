@@ -18,7 +18,7 @@ echo ""
 PYTHON=""
 for cmd in python3 python; do
     if command -v "$cmd" &>/dev/null; then
-        version=$("$cmd" --version 2>&1 | grep -oP '\d+\.\d+\.\d+')
+        version=$("$cmd" --version 2>&1 | sed -n 's/.* \([0-9]*\.[0-9]*\.[0-9]*\).*/\1/p')
         major=$(echo "$version" | cut -d. -f1)
         minor=$(echo "$version" | cut -d. -f2)
         if [ "$major" -ge 3 ] && [ "$minor" -ge 8 ]; then
@@ -86,11 +86,15 @@ echo "=========================================="
 echo "  Setup complete!"
 echo "=========================================="
 echo ""
-echo "Quick start:"
-echo "  $SKILL_SLUG start \"Working on homepage\" --client \"Client Name\""
-echo "  $SKILL_SLUG stop"
-echo "  $SKILL_SLUG log \"Design work\" 2h --client \"Client Name\""
+echo "Quick start (single-user):"
+echo "  $SKILL_SLUG log \"Working on homepage\" 2h --client \"Client Name\""
 echo "  $SKILL_SLUG summary --client \"Client Name\""
+echo ""
+echo "Quick start (multi-user with Mattermost):"
+echo "  $SKILL_SLUG user-add <mattermost_id> --name \"Your Name\""
+echo "  $SKILL_SLUG role-add <mattermost_id> manager"
+echo "  $SKILL_SLUG client-add \"Client Name\" --user <mattermost_id>"
+echo "  $SKILL_SLUG log \"Task\" 2h --client \"Client\" --project \"Project\" --external-id \"JIRA-123\" --user \$HERMES_SESSION_USER_ID"
 echo ""
 echo "Data stored at: $DATA_DIR"
 echo "No telemetry. No tracking. Your data is yours."

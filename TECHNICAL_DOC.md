@@ -2,11 +2,8 @@
 
 ## Visión General
 
-CLI de time tracking para freelancers y agencias. Sin dependencias externas — Python 3.8+ stdlib + SQLite. Almacenamiento local, sin telemetría, sin cloud.
+CLI de time tracking multi-usuario para equipos, freelancers y agencias. Sin dependencias externas — Python 3.8+ stdlib + SQLite. Almacenamiento local, sin telemetría, sin cloud. Integración con Mattermost vía `HERMES_SESSION_USER_ID`.
 
-**Autor**: Nex AI (Kevin Blancaflor)
-**Licencia**: MIT-0 (ClawHub) / AGPL-3.0 (GitHub)
-**Versión**: 1.0.0
 
 ---
 
@@ -14,16 +11,16 @@ CLI de time tracking para freelancers y agencias. Sin dependencias externas — 
 
 ```
 nex-timetrack/
-├── nex-timetrack.py    ← CLI entry point (729 líneas)
+├── nex-timetrack.py     ← CLI entry point (28 comandos)
 ├── lib/
-│   ├── __init__.py     ← Package init
-│   ├── config.py       ← Constantes y configuración
-│   └── storage.py      ← Capa de datos SQLite (618 líneas)
-├── setup.sh            ← Instalador
-├── SKILL.md            ← Definición del skill para ClawHub
-├── skill-card.md       ← Metadata del skill para marketplace
-├── _meta.json          ← Metadata del proyecto
-└── LICENSE.txt         ← Licencia AGPL-3.0
+│   ├── __init__.py      ← Package init
+│   ├── storage.py       ← Capa de datos SQLite + settings + categories
+│   └── permissions.py   ← Capa de permisos centralizada + ROLES
+├── setup.sh             ← Instalador
+├── SKILL.md             ← Definición del skill para ClawHub
+├── skill-card.md        ← Metadata del skill para marketplace
+├── _meta.json           ← Metadata del proyecto
+└── LICENSE.txt          ← Licencia AGPL-3.0
 ```
 
 ### Patrón arquitectónico
@@ -31,25 +28,29 @@ nex-timetrack/
 Arquitectura en 3 capas clásica para CLI:
 
 ```
-┌──────────────────────────────┐
-│  CLI Layer (argparse)        │  nex-timetrack.py
-│  - Parsing de argumentos     │  cmd_*() functions
-│  - Formateo de output        │  _fmt_*() helpers
-│  - Resolución de entidades   │  _resolve_*() helpers
-├──────────────────────────────┤
-│  Config Layer                │  lib/config.py
-│  - Constantes                │
-│  - Paths                     │
-│  - Categorías                │
-├──────────────────────────────┤
-│  Storage Layer (SQLite)      │  lib/storage.py
-│  - CRUD entidades            │
-│  - Timer state machine       │
-│  - Rate cascade              │
-│  - Reporting / export        │
-│  - Full-text search (FTS5)   │
-└──────────────────────────────┘
+┌──────────────────────────────────────┐
+│  CLI Layer (argparse)                │  nex-timetrack.py
+│  - Parsing de argumentos             │  cmd_*() functions
+│  - Formateo de output                │  _fmt_*() helpers
+│  - Resolución de entidades           │  _resolve_*() helpers
+│  - Resolución de usuario             │  _resolve_user_id()
+├──────────────────────────────────────┤
+│  Permission Layer                    │  lib/permissions.py
+│  - Role-based access control         │  check_*() functions
+│  - Assignment validation             │  PermissionDenied exception
+│  - Single-user bypass                │  ROLES constant
+├──────────────────────────────────────┤
+│  Storage Layer (SQLite)              │  lib/storage.py
+│  - CRUD entidades                    │
+│  - Settings & categories (DB)        │
+│  - Rate cascade                      │
+│  - Reporting / export                │
+│  - Full-text search (FTS5)           │
+│  - Multi-user (users, roles, assign) │
+└──────────────────────────────────────┘
 ```
+
+> **Nota**: `lib/config.py` fue eliminado. Toda la configuración de negocio migra a tablas `settings` y `categories` en SQLite. Los paths del filesystem (`DATA_DIR`, `DB_PATH`, `EXPORT_DIR`) son constantes en `storage.py`.
 
 ---
 
@@ -57,7 +58,7 @@ Arquitectura en 3 capas clásica para CLI:
 
 ### 1. CLI Layer — [nex-timetrack.py](nex-timetrack.py)
 
-**Propósito**: Parsing de argumentos, formateo de output, orquestación de comandos.
+**Propósito**: Parsing de argumentos, formateo de output, orquestación de comandos, integración de permisos.
 
 #### Helpers (`_fmt_*`, `_parse_*`, `_resolve_*`)
 
@@ -66,82 +67,120 @@ Arquitectura en 3 capas clásica para CLI:
 | `_fmt_duration(minutes)` | Convierte minutos a formato `Xh Ym` |
 | `_fmt_date(iso_str)` | ISO datetime → `YYYY-MM-DD` |
 | `_fmt_time(iso_str)` | ISO datetime → `HH:MM` |
-| `_fmt_money(amount)` | Formatea moneda con símbolo € |
+| `_fmt_money(amount)` | Formatea moneda con símbolo desde DB (`get_setting('currency_symbol')`) |
 | `_parse_duration(raw)` | Parsea `2h`, `90m`, `1h30m`, `1.5` → minutos |
 | `_resolve_client(name)` | Busca client por nombre fuzzy → ID |
 | `_resolve_project(name)` | Busca project por nombre fuzzy → ID |
+| `_resolve_user_id(args)` | Lee `--user` o `HERMES_SESSION_USER_ID`. Error si falta en multi-user. |
 
 #### Comandos (`cmd_*`)
 
-18 subcomandos organizados en 5 dominios:
+28 subcomandos organizados en 7 dominios:
 
-**Timer** (state machine con tabla singleton `active_timer`). **Deprecado en multi-user** — se mantiene para backward compat single-user:
+**Timer** (deprecated en multi-user — se mantiene para backward compat single-user):
 
 | Comando | Handler | Descripción |
 |---------|---------|-------------|
-| `start` | `cmd_start` | Inicia timer. Si ya existe uno activo, muestra elapsed. **Deprecated multi-user.** |
-| `stop` | `cmd_stop` | Detiene timer, guarda entry, calcula duración real. **Deprecated multi-user.** |
-| `status` | `cmd_status` | Muestra timer activo con elapsed calculado en runtime. **Deprecated multi-user.** |
-| `cancel` | `cmd_cancel` | Elimina timer sin guardar entry. **Deprecated multi-user.** |
+| `start` | `cmd_start` | Inicia timer. **Warning + no-op en multi-user.** |
+| `stop` | `cmd_stop` | Detiene timer. **Warning + no-op en multi-user.** |
+| `status` | `cmd_status` | Muestra timer activo. **Warning + no-op en multi-user.** |
+| `cancel` | `cmd_cancel` | Elimina timer. **Warning + no-op en multi-user.** |
 
 **Entries CRUD**:
 
 | Comando | Handler | Descripción |
 |---------|---------|-------------|
-| `log` | `cmd_log` | Crea entry manual con duración parseada. |
-| `show` | `cmd_show` | Detalle completo de un entry (JOIN con clients/projects). |
-| `list` | `cmd_list` | Lista tabular con filtros múltiples. Default limit: 50. |
-| `edit` | `cmd_edit` | Actualización parcial — solo campos especificados. |
-| `delete` | `cmd_delete` | Borrado con confirmación (`--confirm`). |
-| `search` | `cmd_search` | Full-text search via FTS5. |
+| `log` | `cmd_log` | Crea entry manual. En multi-user: `--client`, `--project`, `--external-id` requeridos para collaborator. |
+| `show` | `cmd_show` | Detalle completo de un entry. Incluye `external_id`. |
+| `list` | `cmd_list` | Lista tabular con filtros. Scope por rol (all/own). Filtro `--external-id`. |
+| `edit` | `cmd_edit` | Actualización parcial. `check_modify_entry()` valida ownership. |
+| `delete` | `cmd_delete` | Borrado con `--confirm`. `check_modify_entry()` valida ownership. |
+| `search` | `cmd_search` | FTS5 search (incluye `external_id`). Scope por rol. |
 
-**Entidades**:
+**Entidades** (manager only para creación):
 
 | Comando | Handler | Descripción |
 |---------|---------|-------------|
-| `client-add` | `cmd_client_add` | Crea cliente con rate opcional. |
+| `client-add` | `cmd_client_add` | Crea cliente. `check_manage_clients()`. |
 | `clients` | `cmd_clients` | Lista todos los clientes. |
-| `project-add` | `cmd_project_add` | Crea proyecto ligado a cliente. |
+| `project-add` | `cmd_project_add` | Crea proyecto. `check_manage_clients()`. |
 | `projects` | `cmd_projects` | Lista proyectos (solo activos por defecto). |
+
+**User Management** (manager only):
+
+| Comando | Handler | Descripción |
+|---------|---------|-------------|
+| `user-add` | `cmd_user_add` | Registra usuario. Bootstrap: sin managers → cualquiera puede agregar. |
+| `user-list` | `cmd_user_list` | Lista usuarios con roles. |
+| `role-add` | `cmd_role_add` | Asigna rol. Bootstrap: sin managers → auto-asignar manager. |
+| `role-remove` | `cmd_role_remove` | Remueve rol. |
+| `assign` | `cmd_assign` | Asigna user a client/project. |
+| `unassign` | `cmd_unassign` | Remueve asignación. |
+| `assignments` | `cmd_assignments` | Lista asignaciones (sin user_id → todos). |
+
+**Settings** (manager only para cambios):
+
+| Comando | Handler | Descripción |
+|---------|---------|-------------|
+| `settings` | `cmd_settings` | Lista todas las settings. |
+| `setting-get` | `cmd_setting_get` | Muestra valor de una setting. |
+| `setting-set` | `cmd_setting_set` | Actualiza setting. `check_manage_settings()`. |
+| `categories` | `cmd_categories` | Lista categorías activas. |
+| `category-add` | `cmd_category_add` | Agrega categoría. `check_manage_settings()`. |
+| `category-remove` | `cmd_category_remove` | Desactiva categoría (soft delete). `check_manage_settings()`. |
 
 **Reporting**:
 
 | Comando | Handler | Descripción |
 |---------|---------|-------------|
-| `summary` | `cmd_summary` | Resumen de horas facturables con desglose por client/project/category. |
-| `stats` | `cmd_stats` | Estadísticas globales: ratio billable, top clients, barras por categoría. |
+| `summary` | `cmd_summary` | Resumen facturación. `--team` para vista equipo. Scope por rol. |
+| `stats` | `cmd_stats` | Estadísticas. Scope por rol (all/own). |
 
 **Export**:
 
 | Comando | Handler | Descripción |
 |---------|---------|-------------|
-| `export` | `cmd_export` | Exporta entries a JSON o CSV en `~/.nex-timetrack/exports/`. |
+| `export` | `cmd_export` | Exporta entries a JSON/CSV. `user_id` según permisos. |
 
 ---
 
-### 2. Config Layer — [lib/config.py](lib/config.py)
+### 2. Permission Layer — [lib/permissions.py](lib/permissions.py)
 
-Constantes estáticas, sin lógica:
+**Propósito**: Validación centralizada de permisos. Todas las funciones son no-op en single-user mode.
 
 ```python
-DATA_DIR     = ~/.nex-timetrack/          # Override: NEX_TIMETRACK_DIR env var
-DB_PATH      = ~/.nex-timetrack/timetrack.db
-EXPORT_DIR   = ~/.nex-timetrack/exports/
+ROLES = ("manager", "timekeeper", "collaborator")
 
-DEFAULT_RATE = 85.00                      # EUR/h
-CURRENCY     = EUR
-ROUND_TO_MINUTES = 15                     # Redondeo para facturación
-
-CATEGORIES = [development, design, meeting, research, admin,
-              support, review, testing, deployment, planning,
-              communication, other]       # 12 categorías
+class PermissionDenied(Exception): ...  # Exit code 3
 ```
+
+| Función | Comportamiento |
+|---------|----------------|
+| `resolve_user(user_id)` | Valida user existe y está activo. None en single-user. |
+| `require_user(user_id)` | Requiere user válido en multi-user. Error si falta. |
+| `require_role(user_id, role)` | Valida que user tenga rol específico. |
+| `check_log_entry(user_id, client_id, project_id)` | Manager→siempre, Timekeeper→denegado, Collaborator→solo asignados + requiere client/project. |
+| `check_view_entries(user_id)` | Retorna 'all' o 'own' según roles. |
+| `check_modify_entry(user_id, entry_user_id)` | Manager→cualquiera, Collaborator→solo propias, Timekeeper→denegado. |
+| `check_manage_clients(user_id)` | Manager only. |
+| `check_manage_users(user_id)` | Manager only. |
+| `check_manage_settings(user_id)` | Manager only. |
+
+**Bootstrap**: cuando no hay managers en la DB, `user-add` y `role-add` no requieren permisos. Permite al primer usuario auto-asignar rol manager.
 
 ---
 
 ### 3. Storage Layer — [lib/storage.py](lib/storage.py)
 
-**Propósito**: Toda interacción con SQLite. 618 líneas, ~35 funciones.
+**Propósito**: Toda interacción con SQLite. Constantes de paths, settings/categories desde DB, CRUD multi-user, reporting, FTS5.
+
+#### Paths (constantes en storage.py)
+
+```python
+DATA_DIR   = Path(os.environ.get("NEX_TIMETRACK_DIR", Path.home() / ".nex-timetrack"))
+DB_PATH    = DATA_DIR / "timetrack.db"
+EXPORT_DIR = DATA_DIR / "exports"
+```
 
 #### Conexión a DB
 
@@ -179,132 +218,170 @@ def _connect():
 │ description                                      │
 │ category                                         │
 │ started_at          ─┐                           │
-│ ended_at             │ solo si viene de timer    │
-│ duration_minutes     │ log manual: started_at =  │
-│ billable            ─┘ date T09:00, ended_at=NULL│
+│ ended_at             │ log: started_at =         │
+│ duration_minutes     │ date T09:00, ended_at=NULL│
+│ billable            ─┘                           │
 │ rate                                             │
 │ tags                                             │
 │ notes                                            │
+│ user_id          ← usuario que registró          │
+│ external_id      ← JIRA/AzureDevOps/GitHub ref   │
 │ created_at                                       │
 │ updated_at                                       │
 └────────────────────────┬─────────────────────────┘
                          │
                          ▼
 ┌──────────────────────────────────────────────────┐
-│               entries_fts (FTS5)                  │
+│            entries_fts (FTS5)                     │
 │──────────────────────────────────────────────────│
 │ rowid → entries.id                               │
-│ description                                      │
-│ notes                                            │
-│ tags                                             │
+│ description, notes, tags, external_id            │
 └──────────────────────────────────────────────────┘
 
 ┌──────────────────────────────────────────────────┐
 │               active_timer                        │
 │──────────────────────────────────────────────────│
-│ id CHECK(1) — singleton, máximo 1 row            │
+│ id CHECK(1) — singleton, solo single-user        │
 │ description, project_id, client_id               │
-│ category, billable, tags                         │
-│ started_at — timestamp de inicio del timer       │
+│ category, billable, tags, started_at             │
 └──────────────────────────────────────────────────┘
+
+┌──────────────┐       ┌──────────────┐
+│    users     │       │  user_roles  │
+│──────────────│       │──────────────│
+│ user_id PK   │◄──────│ user_id FK   │
+│ name         │       │ role         │
+│ active       │       │ PK(user,role)│
+│ created_at   │       └──────────────┘
+└──────┬───────┘
+       │
+       ▼
+┌──────────────────────────────────────────────────┐
+│              assignments                          │
+│──────────────────────────────────────────────────│
+│ id PK                                            │
+│ user_id FK → users (ON DELETE CASCADE)           │
+│ client_id FK → clients (ON DELETE CASCADE)       │
+│ project_id FK → projects (ON DELETE SET NULL)    │
+│ UNIQUE(user_id, client_id, project_id)           │
+│                                                  │
+│ Wildcard: project_id IS NULL = todos los         │
+│ proyectos del cliente                            │
+└──────────────────────────────────────────────────┘
+
+┌──────────────┐       ┌──────────────┐
+│   settings   │       │  categories  │
+│──────────────│       │──────────────│
+│ key PK       │       │ id PK        │
+│ value TEXT   │       │ name UNIQUE  │
+│ updated_at   │       │ active       │
+└──────────────┘       └──────────────┘
 ```
 
-**Tabla `clients`** — Catálogo de clientes. Se escribe cuando:
+#### Cuándo se escribe cada tabla
+
+**Tabla `clients`**:
 - `client-add` → INSERT (name UNIQUE, rate opcional)
-- Nunca se modifica o elimina vía CLI (solo manualmente en DB)
 
-**Tabla `projects`** — Catálogo de proyectos ligados a clientes. Se escribe cuando:
+**Tabla `projects`**:
 - `project-add` → INSERT con FK a client, rate y budget opcionales
-- `active` flag permite "archivar" projects (no se exponen en list por defecto)
 
-**Tabla `entries`** — Registro principal de tiempo. Se escribe cuando:
-- `log` → INSERT manual. `started_at` = fecha + "T09:00:00", `ended_at` = NULL, `duration_minutes` = valor parseado
-- `stop` → INSERT desde timer. `started_at` y `ended_at` calculados del timer, `duration_minutes` = diferencia real
-- `edit` → UPDATE parcial (description, duration, category, tags, notes, rate, billable, client_id, project_id)
+**Tabla `entries`** — Registro principal de tiempo:
+- `log` → INSERT manual. `started_at` = fecha + "T09:00:00", `ended_at` = NULL, `duration_minutes` = valor parseado. `user_id` y `external_id` opcionales en single-user, requeridos en multi-user.
+- `stop` → INSERT desde timer (solo single-user). `started_at` y `ended_at` calculados del timer.
+- `edit` → UPDATE parcial (description, duration, category, tags, notes, rate, billable, client_id, project_id, external_id)
 - `delete` → DELETE con `--confirm`
 
-**Tabla `active_timer`** — Estado del timer en vivo (singleton). Se escribe cuando:
-- `start` → INSERT/REPLACE row id=1 con timestamp actual
-- `stop` → lee row, crea entry, luego DELETE row
-- `cancel` → DELETE row sin crear entry
+**Tabla `active_timer`** — Solo single-user:
+- `start` → INSERT/REPLACE row id=1
+- `stop` → lee row, crea entry, DELETE row
+- `cancel` → DELETE row sin entry
 
-**Tabla `entries_fts`** — Índice de búsqueda full-text (FTS5 virtual table). Se escribe cuando:
-- `stop_timer()` → sync después de crear entry
-- `save_entry()` → sync después de INSERT manual
-- `update_entry()` → re-sync con datos nuevos
-- `delete_entry()` → DELETE row del índice
+**Tabla `entries_fts`** — Índice FTS5 (description, notes, tags, external_id):
+- `stop_timer()`, `save_entry()`, `update_entry()` → sync
+- `delete_entry()` → DELETE del índice
 
-**Tablas internas de FTS5** — SQLite las crea automáticamente al hacer `CREATE VIRTUAL TABLE entries_fts USING fts5(...)`. No se crean explícitamente en el código:
+**Tabla `users`**:
+- `user-add` → INSERT/UPSERT (user_id PK, name)
+- Los user_id provienen de Mattermost IDs
 
-| Tabla | Propósito |
-|-------|-----------|
-| `entries_fts_config` | Configuración del FTS5 (versión, opciones) |
-| `entries_fts_content` | Contenido indexado (copia de description, notes, tags) |
-| `entries_fts_data` | Estructura de datos interna del índice invertido |
-| `entries_fts_docsize` | Tamaño de cada documento (para ranking BM25) |
-| `entries_fts_idx` | Índice de términos → rowids (mapping invertido) |
+**Tabla `user_roles`**:
+- `role-add` → INSERT (user_id, role)
+- `role-remove` → DELETE
 
-Estas tablas se sincronizan automáticamente con `entries_fts` — nunca se manipulan directamente. Se borran todas juntas si se hace `DROP TABLE entries_fts`.
+**Tabla `assignments`**:
+- `assign` → INSERT (user_id, client_id, project_id). Wildcard: project_id=NULL = todos los proyectos del cliente.
+- `unassign` → DELETE
 
-**Tabla `sqlite_sequence`** — Tabla interna de SQLite para rastrear el último valor `AUTOINCREMENT`. Contiene una row por cada tabla con AUTOINCREMENT (`entries`, `projects`). No se manipula directamente.
+**Tabla `settings`**:
+- Seed en `init_db()` con INSERT OR IGNORE
+- `setting-set` → UPSERT
 
-**Índice `sqlite_autoindex_clients_1`** — Índice automático de SQLite para garantizar `UNIQUE` en `clients.name`. Creado implícitamente por la constraint `UNIQUE`.
+**Tabla `categories`**:
+- Seed en `init_db()` con INSERT OR IGNORE (12 categorías)
+- `category-add` → INSERT
+- `category-remove` → UPDATE active=0 (soft delete)
 
-**Relaciones**:
-- `entries.project_id` → `projects.id` (SET NULL on delete) — entry sobrevive si project se borra
-- `entries.client_id` → `clients.id` (SET NULL on delete) — entry sobrevive si client se borra
-- `projects.client_id` → `clients.id` (SET NULL on delete) — project sobrevive sin client
+#### Relaciones
 
-**Índices**: `idx_entries_project`, `idx_entries_client`, `idx_entries_date`, `idx_entries_billable`, `idx_entries_category`, `idx_projects_client`, `idx_projects_active`.
+- `entries.project_id` → `projects.id` (SET NULL) — entry sobrevive sin project
+- `entries.client_id` → `clients.id` (SET NULL) — entry sobrevive sin client
+- `projects.client_id` → `clients.id` (SET NULL) — project sobrevive sin client
+- `user_roles.user_id` → `users.user_id` (CASCADE) — roles se borran con user
+- `assignments.user_id` → `users.user_id` (CASCADE) — asignaciones se borran con user
+- `assignments.client_id` → `clients.id` (CASCADE) — asignaciones se borran con client
+- `assignments.project_id` → `projects.id` (SET NULL) — asignación sobrevive sin project
 
-#### Ciclo de vida de un entry
+#### Índices
 
-```
-                         ┌── timer flow (deprecado en multi-user) ──┐
-                         │                                           │
-                         ▼                                           │
-  start ──→ active_timer ──→ stop ──→ entries + entries_fts         │
-                     │                                               │
-                     ▼                                               │
-                   cancel ──→ void (no entry)                       │
-                                                                     │
-  ── log flow (flujo principal) ──────────────────────────────────  │
-                                                                     │
-  log ──→ entries + entries_fts ◄────────────────────────────────────┘
-              │
-              ├── show (lectura)
-              ├── list (lectura + filtros)
-              ├── search (lectura vía FTS5)
-              ├── edit ──→ entries UPDATE + entries_fts re-sync
-              ├── delete ──→ entries DELETE + entries_fts DELETE
-              ├── summary (agregación en Python)
-              ├── stats (agregación en SQL)
-              └── export (JSON/CSV dump)
-```
+`idx_entries_project`, `idx_entries_client`, `idx_entries_date`, `idx_entries_billable`, `idx_entries_category`, `idx_entries_user`, `idx_entries_external_id`, `idx_projects_client`, `idx_projects_active`, `idx_user_roles_user`, `idx_user_roles_role`, `idx_assignments_user`, `idx_assignments_client`, `idx_categories_active`.
 
 #### Funciones clave
 
 | Función | Tipo | Detalle |
 |---------|------|---------|
-| `init_db()` | Setup | Crea directorios, permisos 700, schema + índices + FTS |
-| `start_timer()` | Timer | INSERT en `active_timer` si vacío. Retorna `(started_at, None)` o `(None, existing)`. |
-| `stop_timer()` | Timer | Lee `active_timer`, calcula duración, INSERT en `entries`, DELETE timer, sync FTS. |
-| `get_active_timer()` | Timer | Lee timer + calcula `elapsed_minutes` en runtime. |
-| `cancel_timer()` | Timer | DELETE timer sin crear entry. |
-| `save_entry()` | CRUD | INSERT entry manual. Resuelve rate automático si no se especifica. |
-| `get_entry()` | CRUD | SELECT con JOIN a projects/clients para nombres. |
-| `list_entries()` | CRUD | Query builder dinámico con filtros opcionales. ORDER BY started_at DESC. |
-| `update_entry()` | CRUD | UPDATE parcial. Whitelist de campos permitidos. Re-sincroniza FTS. |
-| `delete_entry()` | CRUD | DELETE entry + FTS row. |
-| `search_entries()` | Search | FTS5 MATCH. Fallback a LIKE si FTS falla. |
-| `save_client()` | Entidad | INSERT client. Name UNIQUE. |
-| `save_project()` | Entidad | INSERT project con FK a client. |
-| `_resolve_rate()` | Rate cascade | entry > project > client > DEFAULT_RATE |
-| `_round_up()` | Rounding | `ceil(minutes / 15) * 15` |
-| `get_summary()` | Report | Agregaciones en Python sobre `list_entries()`. Desglose por client/project/category/date. |
-| `get_stats()` | Report | Agregaciones en SQL (COUNT, SUM, GROUP BY). Top 10 clients, últimos 12 meses. |
-| `export_entries()` | Export | JSON indentado o CSV con DictWriter. |
-| `_sync_fts()` | FTS | Sincroniza row en `entries_fts` (DELETE + INSERT). |
+| `init_db()` | Setup | Crea schema completo, seed settings + categories |
+| `is_multiuser()` | Helper | True si hay usuarios activos en DB |
+| `has_managers()` | Bootstrap | True si hay algún user con rol manager |
+| `get_setting(key)` | Config | Lee de DB con type casting. Fallback a defaults. |
+| `set_setting(key, value)` | Config | UPSERT en tabla settings |
+| `get_categories()` | Config | Lee categorías activas de DB |
+| `save_user()`, `list_users()` | Users | CRUD usuarios |
+| `add_role()`, `remove_role()`, `get_roles()` | Roles | Gestión de roles (retorna set) |
+| `add_assignment()`, `has_assignment()` | Assign | Asignaciones con wildcard check |
+| `save_entry(user_id, external_id)` | CRUD | INSERT entry con multi-user fields |
+| `get_entry_by_external_id()` | Lookup | Busca entries por referencia externa |
+| `list_entries(user_id, external_id)` | CRUD | Query builder con filtros multi-user |
+| `search_entries(query, user_id)` | Search | FTS5 + LIKE fallback con scope filter |
+| `get_summary(user_id, team)` | Report | Agregaciones Python. team=True ignora user_id filter |
+| `get_stats(user_id, scope)` | Report | Agregaciones SQL con scope own/all |
+| `_resolve_rate()` | Rate cascade | entry > project > client > `get_setting('default_rate')` |
+| `_round_up()` | Rounding | Usa `get_setting('round_to_minutes')` |
+
+#### Ciclo de vida de un entry
+
+```
+                         ┌── timer flow (solo single-user, deprecated) ──┐
+                         │                                                │
+                         ▼                                                │
+  start ──→ active_timer ──→ stop ──→ entries + entries_fts              │
+                     │                                                    │
+                     ▼                                                    │
+                   cancel ──→ void (no entry)                            │
+                                                                          │
+  ── log flow (flujo principal, multi-user) ──────────────────────────── │
+                                                                          │
+  log ──→ entries + entries_fts ◄────────────────────────────────────────┘
+              │
+              ├── show (lectura, incluye external_id)
+              ├── list (filtros: client, project, user, external_id, dates)
+              ├── search (FTS5: description, notes, tags, external_id)
+              ├── edit ──→ entries UPDATE + entries_fts re-sync
+              ├── delete ──→ entries DELETE + entries_fts DELETE
+              ├── summary (agregación Python, scope all/own)
+              ├── stats (agregación SQL, scope all/own)
+              └── export (JSON/CSV, filtrado por permisos)
+```
 
 ---
 
@@ -318,18 +395,47 @@ Resolución automática de tarifa horaria en 4 niveles:
 Entry.rate (override manual)
   → Project.rate
     → Client.rate
-      → DEFAULT_RATE (85 EUR/h)
+      → get_setting('default_rate') (85 EUR/h default, configurable)
 ```
 
-Implementación en `_resolve_rate()`:
-1. Si `project_id` tiene rate → usar esa
-2. Si el project tiene `client_id` → hereda y checkea client rate
-3. Si `client_id` directo tiene rate → usar esa
-4. Default a `DEFAULT_RATE`
+### Multi-User Permission Model
 
-### Timer State Machine
+```
+┌─────────────────┐
+│ is_multiuser()?  │
+│  False → bypass  │
+│  True  ──┐       │
+└──────────┼───────┘
+           ▼
+┌─────────────────────┐
+│ check_*() function   │
+│  resolve_user()      │
+│  get_roles()         │
+│  validate action     │
+│  ↓ fail              │
+│  PermissionDenied    │
+└─────────────────────┘
+```
 
-> **Deprecado en multi-user.** En el flujo Mattermost los usuarios loguean tiempo post-actividad con `log`. Los comandos `start`/`stop`/`status`/`cancel` se mantienen solo para backward compatibility en single-user.
+**Roles**:
+
+| Acción | Manager | Timekeeper | Collaborator |
+|--------|---------|------------|--------------|
+| `log` | ✅ any | ❌ | ✅ assigned only (requires client+project) |
+| `list`/`search` | ✅ all | ✅ all | ✅ own |
+| `edit`/`delete` | ✅ any | ❌ | ✅ own |
+| `summary --team` | ✅ | ✅ | ❌ |
+| `client-add`/`project-add` | ✅ | ❌ | ❌ |
+| User/role/assign management | ✅ | ❌ | ❌ |
+| Settings/categories | ✅ | ❌ | ❌ |
+
+**Bootstrap**: si `has_managers()` retorna False, `user-add` y `role-add` no requieren permisos. Primer usuario se auto-asigna manager.
+
+### Assignment Wildcard
+
+`project_id IS NULL` en tabla `assignments` = acceso a todos los proyectos del cliente. `has_assignment()` checkea wildcard primero, luego project específico.
+
+### Timer State Machine (deprecated)
 
 ```
 [No timer] ──start──→ [active_timer row (id=1)]
@@ -341,29 +447,35 @@ Implementación en `_resolve_rate()`:
      └──────────────────────┘
 ```
 
-- Singleton: `CHECK (id = 1)` garantiza máximo un timer
-- `start` con timer existente → no-op, muestra timer actual
-- `stop` → calcula duración real (`now - started_at`), resuelve rate, crea entry, sincroniza FTS
-- `cancel` → elimina timer sin entry
+Solo funciona en single-user. En multi-user: warning + no-op.
 
 ### Full-Text Search
 
-Tabla virtual FTS5 sobre `(description, notes, tags)`:
+Tabla virtual FTS5 sobre `(description, notes, tags, external_id)`:
+- Sincronización manual en `stop_timer()`, `save_entry()`, `update_entry()`
+- `search_entries()`: MATCH con fallback a LIKE
+- `external_id` indexado → busca por ticket JIRA/AzureDevOps
+- Scope filter: `user_id` para collaborator (own only)
 
-- Sincronización manual: `_sync_fts()` se llama en `stop_timer()`, `save_entry()`, `update_entry()`
-- `search_entries()`: usa `MATCH` con fallback a `LIKE` si FTS falla
-- Ranking por relevancia FTS nativo (`fts.rank`)
+### Settings desde DB
+
+```python
+get_setting('default_rate')     # → 85.0 (float, auto-cast)
+get_setting('currency_symbol')  # → '€' (string)
+get_setting('round_to_minutes') # → 15 (int, auto-cast)
+```
+
+Type casting automático vía `SETTING_TYPE_MAP`. Defaults en `SETTING_DEFAULTS` dict.
 
 ### 15-Minute Rounding
 
-Opcional vía flag `--round-up` en `summary`:
+Opcional vía `--round-up` en `summary`. Usa `get_setting('round_to_minutes')`:
 
 ```python
-def _round_up(minutes):
-    return math.ceil(minutes / 15) * 15
+math.ceil(minutes / round_to) * round_to
 ```
 
-Ejemplo: 23 min → 30 min, 47 min → 60 min. Solo afecta reportes, no entries originales.
+Solo afecta reportes, no entries originales.
 
 ---
 
@@ -371,12 +483,12 @@ Ejemplo: 23 min → 30 min, 47 min → 60 min. Solo afecta reportes, no entries 
 
 Script de instalación:
 
-1. **Python check**: busca `python3` o `python` ≥ 3.8
+1. **Python check**: busca `python3` o `python` ≥ 3.8 (compatible con macOS, sin `grep -P`)
 2. **Directorios**: crea `~/.nex-timetrack/` y `exports/`
 3. **Permisos**: `chmod 700` en data dir (no-Windows)
-4. **DB init**: ejecuta `init_db()` via Python inline
-5. **CLI wrapper**: crea `~/.local/bin/nex-timetrack` → wrapper bash que ejecuta el `.py`
-6. **PATH check**: sugiere agregar `~/.local/bin` al PATH si no está
+4. **DB init**: ejecuta `init_db()` → crea schema + seed settings + seed categories
+5. **CLI wrapper**: crea `~/.local/bin/nex-timetrack`
+6. **PATH check**: sugiere agregar `~/.local/bin` al PATH
 
 ---
 
@@ -384,84 +496,95 @@ Script de instalación:
 
 ### SKILL.md
 
-Define el skill para el marketplace de ClawHub (Claude Code skills):
-
-- **Metadata**: nombre, versión, autor, licencia, keywords, triggers
-- **Keywords**: time tracking, billable hours, freelancer, urenregistratie (NL), etc.
-- **Triggers**: "start timer", "log hours", "billable hours", etc.
-- **Tone Guide**: mapea lenguaje natural → comandos CLI
-- **Ejemplos**: 8 interacciones ejemplo con comandos concretos
+Define el skill v2.0.0 para ClawHub:
+- Multi-user commands con `--user $HERMES_SESSION_USER_ID`
+- Required fields en multi-user (client, project, external-id)
+- Tabla de permisos por rol
+- Bootstrap flow para primer manager
+- Timer commands marcados como deprecated
+- Keywords: JIRA, AzureDevOps, multi-user, team time tracking
 
 ### skill-card.md
 
-Documentación oficial del skill para marketplace:
-- Descripción, publisher, licencia
-- Casos de uso
-- Riesgos conocidos y mitigaciones (export con datos sensibles, paths custom, deletions)
-- Output type/format
-- Consideraciones éticas
+Documentación marketplace:
+- Descripción actualizada con multi-user y external IDs
+- Nuevos riesgos: collaborator self-delete, user IDs en DB
+- Versión 2.0.0
 
 ### _meta.json
 
-Metadata del proyecto en ClawHub:
-- ownerId, slug, versión, timestamp de publicación
+- Versión actualizada a 2.0.0
 
 ---
 
 ## Flujo de Datos Típico
 
-### Timer flow
+### Multi-user log flow (flujo principal)
 
 ```
-User → "nex-timetrack start 'Homepage redesign' --client 'Acme' --category design"
-  → argparse parsea → cmd_start()
-  → _resolve_client('Acme') → busca LIKE '%Acme%' → client_id=5
-  → start_timer(description, client_id=5, category='design')
-  → INSERT active_timer(id=1, ..., started_at=now)
+User → "nex-timetrack log 'API integration' 2h --client 'Acme' --project 'Web' --external-id 'JIRA-1234' --user mm-bob"
+  → argparse parsea → cmd_log()
+  → _resolve_user_id(args) → mm-bob (de --user o env var)
+  → _resolve_client('Acme') → client_id=1
+  → _resolve_project('Web') → project_id=1
+  → check_log_entry('mm-bob', 1, 1)
+    → get_roles('mm-bob') → {'collaborator'}
+    → has_assignment('mm-bob', 1, 1) → True
+    → ✅
+  → save_entry(description, duration=120, client_id=1, project_id=1,
+               user_id='mm-bob', external_id='JIRA-1234')
+    → _resolve_rate(conn, 1, 1) → €100/h (project rate)
+    → INSERT entries(...)
+    → _sync_fts(entry_id, description, notes, tags, 'JIRA-1234')
+  → Print confirmación
+```
+
+### Bootstrap flow
+
+```
+Admin → "nex-timetrack user-add mm-alice --name 'Alice'"
+  → is_multiuser() → False (no users yet)
+  → save_user('mm-alice', 'Alice')
   → Print confirmación
 
-User → "nex-timetrack stop --notes 'Completed hero section'"
-  → cmd_stop()
-  → stop_timer(notes='Completed hero section')
-  → SELECT active_timer → lee started_at
-  → duration = now - started_at (en minutos)
-  → _resolve_rate(conn, project_id, client_id) → €95/h (client rate)
-  → INSERT entries(..., duration_minutes=127.3, rate=95)
-  → _sync_fts(entry_id, description, notes, tags)
-  → DELETE active_timer
-  → Print resumen
+Admin → "nex-timetrack role-add mm-alice manager"
+  → has_managers() → False (bootstrap)
+  → add_role('mm-alice', 'manager')
+  → Print confirmación
+  → Ahora mm-alice puede gestionar todo
 ```
 
-### Manual log flow
+### Single-user log flow (sin cambios)
 
 ```
 User → "nex-timetrack log 'Design review' 1h30m --client 'Acme' --date 2026-05-28"
-  → _parse_duration('1h30m') → 90 minutos
-  → _resolve_client('Acme') → client_id=5
-  → save_entry(description, duration_minutes=90, client_id=5, entry_date='2026-05-28')
-  → started_at = '2026-05-28T09:00:00' (default 9am)
-  → _resolve_rate() → €95/h
-  → INSERT entries(...)
-  → _sync_fts(...)
+  → is_multiuser() → False
+  → _resolve_user_id() → None (no requerido)
+  → check_log_entry(None) → True (bypass)
+  → save_entry(...) sin user_id ni external_id
   → Print confirmación
 ```
 
 ---
 
-## Limitaciones y Decisiones de Diseño
+## Decisiones de Diseño
 
 | Decisión | Razón |
 |----------|-------|
 | Zero dependencias | Portabilidad máxima, sin pip install |
 | SQLite WAL | Lecturas no bloqueantes, writes secuenciales seguros |
-| Singleton timer | Un solo timer activo — simple y sin conflictos |
-| Rate en 4 niveles | Flexibilidad sin complejidad (override en cualquier nivel) |
+| Config en DB (no config.py) | Managers pueden ajustar sin editar código |
+| Permisos explícitos (no decorators) | Cada comando llama check explícito — claro y debuggable |
+| Single-user bypass | Si no hay usuarios, todo funciona como antes |
+| Timer deprecated en multi-user | El flujo Mattermost es log post-actividad |
+| External ID obligatorio en multi-user | Vinculación con tickets JIRA/AzureDevOps |
+| Assignment wildcard (project_id=NULL) | Acceso a todos los proyectos de un cliente sin asignar cada uno |
+| Bootstrap sin permisos | Permite al primer usuario auto-asignar manager |
 | FTS5 sync manual | Control total, no trigger-dependent |
 | Rounding solo en reports | Datos originales intactos, facturación flexible |
-| Entries manuales a 09:00 | Simplificación — no se pide hora de inicio para logs manuales |
+| Entries manuales a 09:00 | Simplificación — no se pide hora de inicio para logs |
 | LIKE fallback para search | Robustez si FTS5 no está disponible |
-| Agregaciones en Python (summary) | Flexibilidad vs. SQL puro — permite rounding y lógica custom |
-| Agregaciones en SQL (stats) | Performance — datos globales, no necesitan transformación |
+| `has_managers()` para bootstrap | Escape hatch limpio para chicken-and-egg del primer manager |
 
 ---
 
@@ -470,8 +593,10 @@ User → "nex-timetrack log 'Design review' 1h30m --client 'Acme' --date 2026-05
 Puntos naturales para extensión:
 
 - **Nuevos comandos**: agregar subparser + `cmd_*` + función en storage
-- **Nuevas categorías**: agregar a `CATEGORIES` en config.py
+- **Nuevos roles**: agregar a `ROLES` en permissions.py + CHECK constraint en schema
 - **Nuevos formatos de export**: agregar rama en `export_entries()`
-- **Multi-moneda**: extender config con currency por client/project
+- **Multi-moneda**: agregar currency por client/project (settings por entidad)
 - **Tags como entities**: mover de TEXT a tabla separada con M2M
 - **API/HTTP wrapper**: storage.py es independiente del CLI — se puede exponer via Flask/FastAPI
+- **Notificaciones**: hook post-entry para enviar a Mattermost/Slack
+- **Budget tracking**: alertas cuando project se acerca al budget_hours

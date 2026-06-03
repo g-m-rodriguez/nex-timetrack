@@ -1,43 +1,36 @@
 ## Description: <br>
-Nex Timetrack helps freelancers and agencies track billable time with live timers, manual entries, client and project rates, billing summaries, search, and CSV/JSON export using local SQLite storage. <br>
+Nex Timetrack helps teams, freelancers and agencies track billable time with multi-user support, role-based permissions, client/project assignments, external ticket references (JIRA/AzureDevOps), configurable settings and categories, billing summaries, full-text search, and CSV/JSON export using local SQLite storage. <br>
 
 This skill is ready for commercial/non-commercial use. <br>
-
-## Publisher: <br>
-[nexaiguy](https://clawhub.ai/user/nexaiguy) <br>
 
 ### License/Terms of Use: <br>
 MIT-0 <br>
 
 
 ## Use Case: <br>
-Freelancers, agencies, and agents supporting them use this skill to start and stop timers, log work manually, manage client and project rates, summarize billable hours, and export local records for invoicing. <br>
+Teams, freelancers, agencies, and agents supporting them use this skill to log time with external ticket references, manage users with roles (manager/timekeeper/collaborator), assign collaborators to specific clients and projects, summarize billable hours with team-wide or individual scope, and export local records for invoicing. <br>
 
 ### Deployment Geography for Use: <br>
 Global <br>
 
 ## Known Risks and Mitigations: <br>
-Risk: Exported files may include client names, emails, rates, hours, and notes. <br>
+Risk: Exported files may include client names, emails, rates, hours, user IDs, and external ticket references. <br>
 Mitigation: Review exported CSV or JSON files before sharing them and protect the local database and export directory as billing records. <br>
 Risk: Custom export paths can write outside the skill's own folder and may overwrite user files. <br>
 Mitigation: Use the default export location unless the destination path is known and safe. <br>
 Risk: Deleting or editing entries can affect records used for billing. <br>
 Mitigation: Back up the local SQLite database before destructive changes or before relying on it for invoicing. <br>
-
-
-## Reference(s): <br>
-- [Nex Timetrack ClawHub release](https://clawhub.ai/nexaiguy/nex-timetrack) <br>
-- [Nex AI website](https://nex-ai.be) <br>
-
+Risk: Collaborators could modify or delete their own billing entries. <br>
+Mitigation: Managers can view all entries; use regular DB backups for audit trail. <br>
 
 ## Skill Output: <br>
 **Output Type(s):** [Text, Markdown, Shell commands, Configuration, Files] <br>
 **Output Format:** [Markdown guidance with inline shell commands and local CSV or JSON exports] <br>
 **Output Parameters:** [1D] <br>
-**Other Properties Related to Output:** [Stores time tracking data locally in SQLite and can export billing records to CSV or JSON.] <br>
+**Other Properties Related to Output:** [Stores time tracking data locally in SQLite with multi-user support and can export billing records to CSV or JSON.] <br>
 
 ## Skill Version(s): <br>
-1.0.0 (source: frontmatter and ClawHub release metadata) <br>
+2.0.0 (source: frontmatter and ClawHub release metadata) <br>
 
 ## Ethical Considerations: <br>
-Users should evaluate whether this skill is appropriate for their environment, review any generated or modified files before relying on them, and apply their organization's safety, security, and compliance requirements before deployment. <br>
+Users should evaluate whether this skill is appropriate for their environment, review any generated or modified files before relying on them, and apply their organization's safety, security, and compliance requirements before deployment. User IDs from Mattermost sessions are stored in the local database. <br>

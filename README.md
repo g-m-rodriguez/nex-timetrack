@@ -2,7 +2,6 @@
 
 Billable time logger for freelancers and agencies. Track time with a live timer or log manually. Manage clients, projects, and rates. Generate billing summaries with optional 15-minute rounding.
 
-**Built by [Nex AI](https://nex-ai.be)**
 
 ## Features
 
@@ -52,7 +51,4 @@ nex-timetrack export csv --client "Bakkerij Peeters"
 
 Rates resolve: entry > project > client > default (85 EUR/h).
 
-## License
 
-- **ClawHub:** MIT-0 (free for any use)
-- **GitHub:** AGPL-3.0 (commercial licenses available via info@nex-ai.be)

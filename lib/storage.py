@@ -12,11 +12,31 @@ import datetime as dt
 from pathlib import Path
 from contextlib import contextmanager
 
-from lib.config import (
-    DATA_DIR, DB_PATH, EXPORT_DIR,
-    BILLABLE, NON_BILLABLE, DEFAULT_RATE,
-    ROUND_TO_MINUTES, CURRENCY_SYMBOL,
-)
+# Paths — were in lib/config.py, now live here
+DATA_DIR = Path(os.environ.get("NEX_TIMETRACK_DIR", Path.home() / ".nex-timetrack"))
+DB_PATH = DATA_DIR / "timetrack.db"
+EXPORT_DIR = DATA_DIR / "exports"
+
+
+# --- Helpers ---
+
+SETTING_TYPE_MAP = {
+    'default_rate': float,
+    'round_to_minutes': int,
+}
+
+SETTING_DEFAULTS = {
+    'default_rate': 85.00,
+    'currency': 'EUR',
+    'currency_symbol': '€',
+    'round_to_minutes': 15,
+}
+
+CATEGORY_SEED = [
+    'development', 'design', 'meeting', 'research', 'admin',
+    'support', 'review', 'testing', 'deployment', 'planning',
+    'communication', 'other',
+]
 
 
 @contextmanager
@@ -34,6 +54,8 @@ def _connect():
     finally:
         conn.close()
 
+
+# --- DB init & migration ---
 
 def init_db():
     DATA_DIR.mkdir(parents=True, exist_ok=True)
@@ -83,6 +105,8 @@ def init_db():
                 notes TEXT,
                 created_at TEXT DEFAULT (datetime('now')),
                 updated_at TEXT DEFAULT (datetime('now')),
+                user_id TEXT,
+                external_id TEXT,
                 FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE SET NULL,
                 FOREIGN KEY (client_id) REFERENCES clients(id) ON DELETE SET NULL
             );
@@ -98,39 +122,292 @@ def init_db():
                 started_at TEXT NOT NULL
             );
 
+            CREATE TABLE IF NOT EXISTS users (
+                user_id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                active INTEGER DEFAULT 1,
+                created_at TEXT DEFAULT (datetime('now'))
+            );
+
+            CREATE TABLE IF NOT EXISTS user_roles (
+                user_id TEXT NOT NULL,
+                role TEXT NOT NULL CHECK(role IN ('manager','timekeeper','collaborator')),
+                PRIMARY KEY (user_id, role),
+                FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE
+            );
+
+            CREATE TABLE IF NOT EXISTS assignments (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id TEXT NOT NULL,
+                client_id INTEGER NOT NULL,
+                project_id INTEGER,
+                created_at TEXT DEFAULT (datetime('now')),
+                UNIQUE(user_id, client_id, project_id),
+                FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE,
+                FOREIGN KEY (client_id) REFERENCES clients(id) ON DELETE CASCADE,
+                FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE SET NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS settings (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL,
+                updated_at TEXT DEFAULT (datetime('now'))
+            );
+
+            CREATE TABLE IF NOT EXISTS categories (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL UNIQUE,
+                active INTEGER DEFAULT 1
+            );
+
+            CREATE VIRTUAL TABLE IF NOT EXISTS entries_fts USING fts5(
+                description, notes, tags, external_id
+            );
+
             CREATE INDEX IF NOT EXISTS idx_entries_project ON entries(project_id);
             CREATE INDEX IF NOT EXISTS idx_entries_client ON entries(client_id);
             CREATE INDEX IF NOT EXISTS idx_entries_date ON entries(started_at);
             CREATE INDEX IF NOT EXISTS idx_entries_billable ON entries(billable);
             CREATE INDEX IF NOT EXISTS idx_entries_category ON entries(category);
+            CREATE INDEX IF NOT EXISTS idx_entries_user ON entries(user_id);
+            CREATE INDEX IF NOT EXISTS idx_entries_external_id ON entries(external_id);
             CREATE INDEX IF NOT EXISTS idx_projects_client ON projects(client_id);
             CREATE INDEX IF NOT EXISTS idx_projects_active ON projects(active);
-
-            CREATE VIRTUAL TABLE IF NOT EXISTS entries_fts USING fts5(
-                description, notes, tags
-            );
+            CREATE INDEX IF NOT EXISTS idx_user_roles_user ON user_roles(user_id);
+            CREATE INDEX IF NOT EXISTS idx_user_roles_role ON user_roles(role);
+            CREATE INDEX IF NOT EXISTS idx_assignments_user ON assignments(user_id);
+            CREATE INDEX IF NOT EXISTS idx_assignments_client ON assignments(client_id);
+            CREATE INDEX IF NOT EXISTS idx_categories_active ON categories(active);
         """)
+
+        # Seed settings
+        for key, value in SETTING_DEFAULTS.items():
+            conn.execute(
+                "INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)",
+                (key, str(value))
+            )
+
+        # Seed categories
+        for cat in CATEGORY_SEED:
+            conn.execute(
+                "INSERT OR IGNORE INTO categories (name) VALUES (?)",
+                (cat,)
+            )
+
+
+# --- Settings ---
+
+def get_setting(key, default=None):
+    with _connect() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT value FROM settings WHERE key = ?", (key,))
+        row = cursor.fetchone()
+        if row:
+            cast = SETTING_TYPE_MAP.get(key)
+            if cast:
+                return cast(row['value'])
+            return row['value']
+    if default is not None:
+        return default
+    return SETTING_DEFAULTS.get(key)
+
+
+def set_setting(key, value):
+    with _connect() as conn:
+        conn.execute("""
+            INSERT INTO settings (key, value, updated_at) VALUES (?, ?, datetime('now'))
+            ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = datetime('now')
+        """, (key, str(value)))
+
+
+def list_settings():
+    with _connect() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT key, value, updated_at FROM settings ORDER BY key")
+        return [dict(r) for r in cursor.fetchall()]
+
+
+def has_managers():
+    """Check if any user has the manager role. Used for bootstrap."""
+    with _connect() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT COUNT(*) as c FROM user_roles WHERE role = 'manager'")
+        return cursor.fetchone()['c'] > 0
+
+
+# --- Categories ---
+
+def get_categories(active_only=True):
+    with _connect() as conn:
+        cursor = conn.cursor()
+        query = "SELECT name FROM categories"
+        if active_only:
+            query += " WHERE active = 1"
+        query += " ORDER BY name"
+        cursor.execute(query)
+        return [r['name'] for r in cursor.fetchall()]
+
+
+def add_category(name):
+    with _connect() as conn:
+        conn.execute("INSERT INTO categories (name) VALUES (?)", (name,))
+
+
+def deactivate_category(name):
+    with _connect() as conn:
+        conn.execute("UPDATE categories SET active = 0 WHERE name = ?", (name,))
+
+
+# --- Multi-user helpers ---
+
+def is_multiuser():
+    with _connect() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT COUNT(*) as c FROM users WHERE active = 1")
+        return cursor.fetchone()['c'] > 0
+
+
+# --- Users CRUD ---
+
+def save_user(user_id, name):
+    with _connect() as conn:
+        conn.execute("""
+            INSERT INTO users (user_id, name) VALUES (?, ?)
+            ON CONFLICT(user_id) DO UPDATE SET name = excluded.name, active = 1
+        """, (user_id, name))
+
+
+def get_user(user_id):
+    with _connect() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM users WHERE user_id = ?", (user_id,))
+        row = cursor.fetchone()
+        return dict(row) if row else None
+
+
+def list_users():
+    with _connect() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM users ORDER BY name ASC")
+        return [dict(r) for r in cursor.fetchall()]
+
+
+def deactivate_user(user_id):
+    with _connect() as conn:
+        conn.execute("UPDATE users SET active = 0 WHERE user_id = ?", (user_id,))
+
+
+# --- Roles ---
+
+def add_role(user_id, role):
+    with _connect() as conn:
+        conn.execute("""
+            INSERT OR IGNORE INTO user_roles (user_id, role) VALUES (?, ?)
+        """, (user_id, role))
+
+
+def remove_role(user_id, role):
+    with _connect() as conn:
+        conn.execute("""
+            DELETE FROM user_roles WHERE user_id = ? AND role = ?
+        """, (user_id, role))
+
+
+def get_roles(user_id):
+    with _connect() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT role FROM user_roles WHERE user_id = ?", (user_id,))
+        return {r['role'] for r in cursor.fetchall()}
+
+
+# --- Assignments ---
+
+def add_assignment(user_id, client_id, project_id=None):
+    with _connect() as conn:
+        conn.execute("""
+            INSERT OR IGNORE INTO assignments (user_id, client_id, project_id)
+            VALUES (?, ?, ?)
+        """, (user_id, client_id, project_id))
+
+
+def remove_assignment(user_id, client_id, project_id=None):
+    with _connect() as conn:
+        if project_id:
+            conn.execute("""
+                DELETE FROM assignments
+                WHERE user_id = ? AND client_id = ? AND project_id = ?
+            """, (user_id, client_id, project_id))
+        else:
+            conn.execute("""
+                DELETE FROM assignments
+                WHERE user_id = ? AND client_id = ? AND project_id IS NULL
+            """, (user_id, client_id))
+
+
+def get_assignments(user_id=None):
+    with _connect() as conn:
+        cursor = conn.cursor()
+        if user_id:
+            cursor.execute("""
+                SELECT a.*, c.name as client_name, p.name as project_name
+                FROM assignments a
+                LEFT JOIN clients c ON a.client_id = c.id
+                LEFT JOIN projects p ON a.project_id = p.id
+                WHERE a.user_id = ?
+                ORDER BY c.name, p.name
+            """, (user_id,))
+        else:
+            cursor.execute("""
+                SELECT a.*, u.name as user_name, c.name as client_name, p.name as project_name
+                FROM assignments a
+                JOIN users u ON a.user_id = u.user_id
+                LEFT JOIN clients c ON a.client_id = c.id
+                LEFT JOIN projects p ON a.project_id = p.id
+                ORDER BY u.name, c.name, p.name
+            """)
+        return [dict(r) for r in cursor.fetchall()]
+
+
+def has_assignment(user_id, client_id, project_id=None):
+    with _connect() as conn:
+        cursor = conn.cursor()
+        # Check client-level wildcard (project_id IS NULL = all projects)
+        cursor.execute("""
+            SELECT id FROM assignments
+            WHERE user_id = ? AND client_id = ? AND project_id IS NULL
+        """, (user_id, client_id))
+        if cursor.fetchone():
+            return True
+        # Check specific project
+        if project_id:
+            cursor.execute("""
+                SELECT id FROM assignments
+                WHERE user_id = ? AND client_id = ? AND project_id = ?
+            """, (user_id, client_id, project_id))
+            return cursor.fetchone() is not None
+        return False
 
 
 # --- FTS sync ---
 
-def _sync_fts(conn, row_id, description, notes, tags):
+def _sync_fts(conn, row_id, description, notes, tags, external_id=None):
     conn.execute("DELETE FROM entries_fts WHERE rowid = ?", (row_id,))
     conn.execute("""
-        INSERT INTO entries_fts(rowid, description, notes, tags)
-        VALUES (?, ?, ?, ?)
-    """, (row_id, description or '', notes or '', tags or ''))
+        INSERT INTO entries_fts(rowid, description, notes, tags, external_id)
+        VALUES (?, ?, ?, ?, ?)
+    """, (row_id, description or '', notes or '', tags or '', external_id or ''))
 
 
 def _sync_fts_from_row(conn, row_id):
     cursor = conn.cursor()
-    cursor.execute("SELECT description, notes, tags FROM entries WHERE id = ?", (row_id,))
+    cursor.execute("SELECT description, notes, tags, external_id FROM entries WHERE id = ?", (row_id,))
     row = cursor.fetchone()
     if row:
-        _sync_fts(conn, row_id, row['description'], row['notes'], row['tags'])
+        _sync_fts(conn, row_id, row['description'], row['notes'], row['tags'],
+                  row['external_id'])
 
 
-# --- Timer ---
+# --- Timer (deprecated in multi-user) ---
 
 def start_timer(description, project_id=None, client_id=None, category="other",
                 billable=True, tags=None):
@@ -218,7 +495,7 @@ def cancel_timer():
 
 def save_entry(description, duration_minutes, project_id=None, client_id=None,
                category="other", billable=True, tags=None, notes=None,
-               entry_date=None, rate=None):
+               entry_date=None, rate=None, user_id=None, external_id=None):
     if not entry_date:
         entry_date = dt.date.today().isoformat()
 
@@ -231,12 +508,14 @@ def save_entry(description, duration_minutes, project_id=None, client_id=None,
         cursor = conn.cursor()
         cursor.execute("""
             INSERT INTO entries (project_id, client_id, description, category,
-                                started_at, duration_minutes, billable, rate, tags, notes)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                started_at, duration_minutes, billable, rate,
+                                tags, notes, user_id, external_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (project_id, client_id, description, category, started_at,
-              duration_minutes, 1 if billable else 0, rate, tags, notes))
+              duration_minutes, 1 if billable else 0, rate, tags, notes,
+              user_id, external_id))
         row_id = cursor.lastrowid
-        _sync_fts(conn, row_id, description, notes, tags)
+        _sync_fts(conn, row_id, description, notes, tags, external_id)
         return row_id
 
 
@@ -254,8 +533,23 @@ def get_entry(entry_id):
         return dict(row) if row else None
 
 
+def get_entry_by_external_id(external_id):
+    with _connect() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT e.*, p.name as project_name, c.name as client_name
+            FROM entries e
+            LEFT JOIN projects p ON e.project_id = p.id
+            LEFT JOIN clients c ON e.client_id = c.id
+            WHERE e.external_id = ?
+            ORDER BY e.started_at DESC
+        """, (external_id,))
+        return [dict(r) for r in cursor.fetchall()]
+
+
 def list_entries(project_id=None, client_id=None, category=None,
-                 billable=None, date_from=None, date_to=None, limit=50):
+                 billable=None, date_from=None, date_to=None, limit=50,
+                 user_id=None, external_id=None):
     with _connect() as conn:
         query = """
             SELECT e.*, p.name as project_name, c.name as client_name
@@ -284,6 +578,12 @@ def list_entries(project_id=None, client_id=None, category=None,
         if date_to:
             query += " AND e.started_at <= ?"
             params.append(date_to + "T23:59:59")
+        if user_id:
+            query += " AND e.user_id = ?"
+            params.append(user_id)
+        if external_id:
+            query += " AND e.external_id = ?"
+            params.append(external_id)
 
         query += " ORDER BY e.started_at DESC LIMIT ?"
         params.append(limit)
@@ -297,6 +597,7 @@ def update_entry(entry_id, **kwargs):
     allowed = {
         'description', 'category', 'duration_minutes', 'billable',
         'rate', 'tags', 'notes', 'project_id', 'client_id',
+        'user_id', 'external_id',
     }
     fields = {k: v for k, v in kwargs.items() if k in allowed}
     if not fields:
@@ -326,31 +627,40 @@ def delete_entry(entry_id):
         return cursor.rowcount > 0
 
 
-def search_entries(query_text):
+def search_entries(query_text, user_id=None):
     with _connect() as conn:
         cursor = conn.cursor()
         try:
-            cursor.execute("""
+            base_query = """
                 SELECT e.*, p.name as project_name, c.name as client_name
                 FROM entries_fts fts
                 JOIN entries e ON e.id = fts.rowid
                 LEFT JOIN projects p ON e.project_id = p.id
                 LEFT JOIN clients c ON e.client_id = c.id
                 WHERE entries_fts MATCH ?
-                ORDER BY fts.rank
-                LIMIT 50
-            """, (query_text,))
+            """
+            params = [query_text]
+            if user_id:
+                base_query += " AND e.user_id = ?"
+                params.append(user_id)
+            base_query += " ORDER BY fts.rank LIMIT 50"
+            cursor.execute(base_query, params)
             return [dict(row) for row in cursor.fetchall()]
         except sqlite3.OperationalError:
             like_q = f"%{query_text}%"
-            cursor.execute("""
+            base_query = """
                 SELECT e.*, p.name as project_name, c.name as client_name
                 FROM entries e
                 LEFT JOIN projects p ON e.project_id = p.id
                 LEFT JOIN clients c ON e.client_id = c.id
-                WHERE e.description LIKE ? OR e.notes LIKE ? OR e.tags LIKE ?
-                ORDER BY e.started_at DESC LIMIT 50
-            """, (like_q, like_q, like_q))
+                WHERE (e.description LIKE ? OR e.notes LIKE ? OR e.tags LIKE ? OR e.external_id LIKE ?)
+            """
+            params = [like_q, like_q, like_q, like_q]
+            if user_id:
+                base_query += " AND e.user_id = ?"
+                params.append(user_id)
+            base_query += " ORDER BY e.started_at DESC LIMIT 50"
+            cursor.execute(base_query, params)
             return [dict(row) for row in cursor.fetchall()]
 
 
@@ -461,20 +771,21 @@ def _resolve_rate(conn, project_id=None, client_id=None):
         if cl and cl['rate']:
             return cl['rate']
 
-    return DEFAULT_RATE
+    return get_setting('default_rate')
 
 
 # --- Reporting ---
 
 def _round_up(minutes):
-    if ROUND_TO_MINUTES <= 0:
+    round_to = get_setting('round_to_minutes')
+    if round_to <= 0:
         return minutes
-    return math.ceil(minutes / ROUND_TO_MINUTES) * ROUND_TO_MINUTES
+    return math.ceil(minutes / round_to) * round_to
 
 
 def get_summary(client_id=None, project_id=None, date_from=None, date_to=None,
-                billable_only=False, round_up=False):
-    entries = list_entries(
+                billable_only=False, round_up=False, user_id=None, team=False):
+    filters = dict(
         client_id=client_id,
         project_id=project_id,
         date_from=date_from,
@@ -482,7 +793,13 @@ def get_summary(client_id=None, project_id=None, date_from=None, date_to=None,
         billable=True if billable_only else None,
         limit=10000,
     )
+    if not team and user_id:
+        filters['user_id'] = user_id
 
+    entries = list_entries(**filters)
+
+    default_rate = get_setting('default_rate')
+    currency_symbol = get_setting('currency_symbol')
     total_minutes = 0
     billable_minutes = 0
     total_amount = 0.0
@@ -500,20 +817,20 @@ def get_summary(client_id=None, project_id=None, date_from=None, date_to=None,
 
         if e['billable']:
             billable_minutes += mins
-            rate = e['rate'] or DEFAULT_RATE
+            rate = e['rate'] or default_rate
             total_amount += (mins / 60.0) * rate
 
         client = e['client_name'] or "No client"
         by_client.setdefault(client, {'minutes': 0, 'amount': 0.0})
         by_client[client]['minutes'] += mins
         if e['billable']:
-            by_client[client]['amount'] += (mins / 60.0) * (e['rate'] or DEFAULT_RATE)
+            by_client[client]['amount'] += (mins / 60.0) * (e['rate'] or default_rate)
 
         project = e['project_name'] or "No project"
         by_project.setdefault(project, {'minutes': 0, 'amount': 0.0})
         by_project[project]['minutes'] += mins
         if e['billable']:
-            by_project[project]['amount'] += (mins / 60.0) * (e['rate'] or DEFAULT_RATE)
+            by_project[project]['amount'] += (mins / 60.0) * (e['rate'] or default_rate)
 
         cat = e['category'] or "other"
         by_category.setdefault(cat, 0)
@@ -537,11 +854,19 @@ def get_summary(client_id=None, project_id=None, date_from=None, date_to=None,
     }
 
 
-def get_stats():
+def get_stats(user_id=None, scope='own'):
+    default_rate = get_setting('default_rate')
+
     with _connect() as conn:
         cursor = conn.cursor()
 
-        cursor.execute("SELECT COUNT(*) as c FROM entries")
+        user_filter = ""
+        user_params = []
+        if scope == 'own' and user_id:
+            user_filter = " AND user_id = ?"
+            user_params = [user_id]
+
+        cursor.execute(f"SELECT COUNT(*) as c FROM entries WHERE 1=1{user_filter}", user_params)
         total_entries = cursor.fetchone()['c']
 
         cursor.execute("SELECT COUNT(*) as c FROM clients")
@@ -550,37 +875,39 @@ def get_stats():
         cursor.execute("SELECT COUNT(*) as c FROM projects WHERE active = 1")
         total_projects = cursor.fetchone()['c']
 
-        cursor.execute("SELECT COALESCE(SUM(duration_minutes), 0) as t FROM entries")
+        cursor.execute(f"SELECT COALESCE(SUM(duration_minutes), 0) as t FROM entries WHERE 1=1{user_filter}", user_params)
         total_minutes = cursor.fetchone()['t']
 
-        cursor.execute("SELECT COALESCE(SUM(duration_minutes), 0) as t FROM entries WHERE billable = 1")
+        cursor.execute(f"SELECT COALESCE(SUM(duration_minutes), 0) as t FROM entries WHERE billable = 1{user_filter}", user_params)
         billable_minutes = cursor.fetchone()['t']
 
-        cursor.execute("""
+        cursor.execute(f"""
             SELECT COALESCE(SUM(duration_minutes / 60.0 * COALESCE(rate, ?)), 0) as t
-            FROM entries WHERE billable = 1
-        """, (DEFAULT_RATE,))
+            FROM entries WHERE billable = 1{user_filter}
+        """, [default_rate] + user_params)
         total_revenue = cursor.fetchone()['t']
 
-        cursor.execute("""
+        cursor.execute(f"""
             SELECT category, COALESCE(SUM(duration_minutes), 0) as t
-            FROM entries GROUP BY category ORDER BY t DESC
-        """)
+            FROM entries WHERE 1=1{user_filter}
+            GROUP BY category ORDER BY t DESC
+        """, user_params)
         by_category = {row['category']: row['t'] for row in cursor.fetchall()}
 
-        cursor.execute("""
+        cursor.execute(f"""
             SELECT c.name, COALESCE(SUM(e.duration_minutes), 0) as t
             FROM entries e
             JOIN clients c ON e.client_id = c.id
+            WHERE 1=1{user_filter.replace('user_id', 'e.user_id')}
             GROUP BY c.name ORDER BY t DESC LIMIT 10
-        """)
+        """, user_params)
         top_clients = {row['name']: row['t'] for row in cursor.fetchall()}
 
-        cursor.execute("""
+        cursor.execute(f"""
             SELECT strftime('%Y-%m', started_at) as month, COALESCE(SUM(duration_minutes), 0) as t
-            FROM entries WHERE started_at IS NOT NULL
+            FROM entries WHERE started_at IS NOT NULL{user_filter}
             GROUP BY month ORDER BY month DESC LIMIT 12
-        """)
+        """, user_params)
         by_month = {row['month']: row['t'] for row in cursor.fetchall()}
 
         return {
@@ -600,7 +927,9 @@ def get_stats():
 
 # --- Export ---
 
-def export_entries(format_type='json', **filters):
+def export_entries(format_type='json', user_id=None, **filters):
+    if user_id:
+        filters['user_id'] = user_id
     entries = list_entries(limit=10000, **filters)
     if format_type == 'json':
         return json.dumps(entries, indent=2, default=str)

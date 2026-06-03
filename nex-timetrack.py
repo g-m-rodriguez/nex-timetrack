@@ -18,13 +18,23 @@ from lib.storage import (
     search_entries, save_client, get_client, find_client_by_name,
     list_clients, save_project, get_project, find_project_by_name,
     list_projects, get_summary, get_stats, export_entries,
+    get_setting, set_setting, list_settings,
+    get_categories, add_category, deactivate_category,
+    is_multiuser, has_managers, save_user, get_user, list_users, deactivate_user,
+    add_role, remove_role, get_roles,
+    add_assignment, remove_assignment, get_assignments, has_assignment,
+    get_entry_by_external_id,
 )
-from lib.config import (
-    CATEGORIES, DEFAULT_RATE, CURRENCY_SYMBOL,
-    ROUND_TO_MINUTES, SEPARATOR, SUBSEPARATOR, EXPORT_DIR,
+from lib.permissions import (
+    PermissionDenied,
+    resolve_user, require_user, require_role,
+    check_log_entry, check_view_entries, check_modify_entry,
+    check_manage_clients, check_manage_users, check_manage_settings,
 )
 
 FOOTER = "[Timetrack by Nex AI | nex-ai.be]"
+SEPARATOR = "=" * 60
+SUBSEPARATOR = "-" * 60
 
 
 # --- Helpers ---
@@ -60,7 +70,7 @@ def _fmt_time(iso_str):
 
 
 def _fmt_money(amount):
-    return f"{CURRENCY_SYMBOL}{amount:,.2f}"
+    return f"{get_setting('currency_symbol')}{amount:,.2f}"
 
 
 def _parse_duration(raw):
@@ -93,10 +103,25 @@ def _resolve_project(name):
     return None
 
 
-# --- Commands ---
+def _resolve_user_id(args):
+    user = getattr(args, 'user', None)
+    if not user:
+        user = os.environ.get('HERMES_SESSION_USER_ID')
+    if is_multiuser() and not user:
+        print("Error: --user or HERMES_SESSION_USER_ID required in multi-user mode.")
+        sys.exit(1)
+    return user
+
+
+# --- Timer commands (deprecated in multi-user) ---
 
 def cmd_start(args):
     init_db()
+
+    if is_multiuser():
+        print("Warning: 'start' is deprecated in multi-user mode. Use 'log' to record time.")
+        print(FOOTER)
+        return
 
     client_id = _resolve_client(args.client)
     project_id = _resolve_project(args.project)
@@ -132,6 +157,11 @@ def cmd_start(args):
 def cmd_stop(args):
     init_db()
 
+    if is_multiuser():
+        print("Warning: 'stop' is deprecated in multi-user mode. Use 'log' to record time.")
+        print(FOOTER)
+        return
+
     result = stop_timer(notes=args.notes)
     if not result:
         print("No active timer.")
@@ -147,6 +177,11 @@ def cmd_stop(args):
 
 def cmd_status(args):
     init_db()
+
+    if is_multiuser():
+        print("Warning: 'status' is deprecated in multi-user mode. Use 'log' to record time.")
+        print(FOOTER)
+        return
 
     timer = get_active_timer()
     if not timer:
@@ -165,6 +200,11 @@ def cmd_status(args):
 def cmd_cancel(args):
     init_db()
 
+    if is_multiuser():
+        print("Warning: 'cancel' is deprecated in multi-user mode.")
+        print(FOOTER)
+        return
+
     timer = cancel_timer()
     if not timer:
         print("No active timer.")
@@ -174,13 +214,22 @@ def cmd_cancel(args):
     print(FOOTER)
 
 
+# --- Entries CRUD ---
+
 def cmd_log(args):
     init_db()
+    user_id = _resolve_user_id(args)
 
     duration = _parse_duration(args.duration)
     client_id = _resolve_client(args.client)
     project_id = _resolve_project(args.project)
     billable = not args.non_billable
+
+    try:
+        check_log_entry(user_id, client_id, project_id)
+    except PermissionDenied as e:
+        print(f"Error: {e}")
+        sys.exit(1)
 
     entry_id = save_entry(
         description=args.description,
@@ -193,6 +242,8 @@ def cmd_log(args):
         notes=args.notes,
         entry_date=args.date,
         rate=args.rate,
+        user_id=user_id,
+        external_id=args.external_id,
     )
 
     print(f"Entry logged (ID: {entry_id})")
@@ -202,6 +253,8 @@ def cmd_log(args):
         print(f"  Client: {args.client}")
     if args.project:
         print(f"  Project: {args.project}")
+    if args.external_id:
+        print(f"  External ID: {args.external_id}")
     print(f"  Billable: {'yes' if billable else 'no'}")
     print(FOOTER)
 
@@ -233,6 +286,8 @@ def cmd_show(args):
     if entry['rate']:
         amount = (entry['duration_minutes'] / 60.0) * entry['rate']
         print(f"Rate: {_fmt_money(entry['rate'])}/h = {_fmt_money(amount)}")
+    if entry.get('external_id'):
+        print(f"External ID: {entry['external_id']}")
     if entry['tags']:
         print(f"Tags: {entry['tags']}")
     if entry['notes']:
@@ -243,6 +298,7 @@ def cmd_show(args):
 
 def cmd_list(args):
     init_db()
+    user_id = _resolve_user_id(args)
 
     client_id = _resolve_client(args.client) if args.client else None
     project_id = _resolve_project(args.project) if args.project else None
@@ -252,6 +308,9 @@ def cmd_list(args):
     elif args.non_billable:
         billable = False
 
+    scope = check_view_entries(user_id)
+    filter_user = user_id if scope == 'own' else None
+
     entries = list_entries(
         project_id=project_id,
         client_id=client_id,
@@ -260,6 +319,8 @@ def cmd_list(args):
         date_from=args.date_from,
         date_to=args.date_to,
         limit=args.limit or 50,
+        user_id=filter_user,
+        external_id=args.external_id if hasattr(args, 'external_id') and args.external_id else None,
     )
 
     if not entries:
@@ -286,6 +347,19 @@ def cmd_list(args):
 
 def cmd_edit(args):
     init_db()
+    user_id = _resolve_user_id(args)
+
+    entry = get_entry(args.id)
+    if not entry:
+        print(f"Entry {args.id} not found.")
+        print(FOOTER)
+        return
+
+    try:
+        check_modify_entry(user_id, entry.get('user_id'))
+    except PermissionDenied as e:
+        print(f"Error: {e}")
+        sys.exit(1)
 
     updates = {}
     if args.description:
@@ -300,6 +374,8 @@ def cmd_edit(args):
         updates['tags'] = args.tags
     if args.rate is not None:
         updates['rate'] = args.rate
+    if getattr(args, 'external_id', None):
+        updates['external_id'] = args.external_id
     if args.billable:
         updates['billable'] = True
     elif args.non_billable:
@@ -329,12 +405,19 @@ def cmd_edit(args):
 
 def cmd_delete(args):
     init_db()
+    user_id = _resolve_user_id(args)
 
     entry = get_entry(args.id)
     if not entry:
         print(f"Entry {args.id} not found.")
         print(FOOTER)
         return
+
+    try:
+        check_modify_entry(user_id, entry.get('user_id'))
+    except PermissionDenied as e:
+        print(f"Error: {e}")
+        sys.exit(1)
 
     if not args.confirm:
         print(f"Delete entry #{args.id}: {entry['description']} ({_fmt_duration(entry['duration_minutes'])})?")
@@ -349,8 +432,12 @@ def cmd_delete(args):
 
 def cmd_search(args):
     init_db()
+    user_id = _resolve_user_id(args)
 
-    results = search_entries(args.query)
+    scope = check_view_entries(user_id)
+    filter_user = user_id if scope == 'own' else None
+
+    results = search_entries(args.query, user_id=filter_user)
     if not results:
         print(f"No entries matching '{args.query}'")
         print(FOOTER)
@@ -362,13 +449,24 @@ def cmd_search(args):
         print(f"       {_fmt_date(e['started_at'])} | {_fmt_duration(e['duration_minutes'])}", end="")
         if e['client_name']:
             print(f" | {e['client_name']}", end="")
+        if e.get('external_id'):
+            print(f" | {e['external_id']}", end="")
         print()
 
     print(f"\n{FOOTER}")
 
 
+# --- Client/Project commands ---
+
 def cmd_client_add(args):
     init_db()
+    user_id = _resolve_user_id(args)
+
+    try:
+        check_manage_clients(user_id)
+    except PermissionDenied as e:
+        print(f"Error: {e}")
+        sys.exit(1)
 
     cid = save_client(
         name=args.name,
@@ -409,6 +507,13 @@ def cmd_clients(args):
 
 def cmd_project_add(args):
     init_db()
+    user_id = _resolve_user_id(args)
+
+    try:
+        check_manage_clients(user_id)
+    except PermissionDenied as e:
+        print(f"Error: {e}")
+        sys.exit(1)
 
     client_id = _resolve_client(args.client) if args.client else None
 
@@ -453,11 +558,16 @@ def cmd_projects(args):
     print(FOOTER)
 
 
+# --- Reporting ---
+
 def cmd_summary(args):
     init_db()
+    user_id = _resolve_user_id(args)
 
     client_id = _resolve_client(args.client) if args.client else None
     project_id = _resolve_project(args.project) if args.project else None
+
+    team = getattr(args, 'team', False)
 
     summary = get_summary(
         client_id=client_id,
@@ -466,7 +576,11 @@ def cmd_summary(args):
         date_to=args.date_to,
         billable_only=args.billable,
         round_up=args.round_up,
+        user_id=user_id,
+        team=team,
     )
+
+    round_to = get_setting('round_to_minutes')
 
     print(f"\n{SEPARATOR}")
     print(f"TIME SUMMARY")
@@ -481,7 +595,7 @@ def cmd_summary(args):
     print(f"Total billable: {_fmt_money(summary['total_amount'])}")
 
     if args.round_up:
-        print(f"  (rounded up to {ROUND_TO_MINUTES}min blocks)")
+        print(f"  (rounded up to {round_to}min blocks)")
 
     if summary['by_client']:
         print(f"\nBy Client:")
@@ -503,8 +617,11 @@ def cmd_summary(args):
 
 def cmd_stats(args):
     init_db()
+    user_id = _resolve_user_id(args)
 
-    stats = get_stats()
+    scope = check_view_entries(user_id)
+
+    stats = get_stats(user_id=user_id, scope=scope)
 
     print(f"\n{SEPARATOR}")
     print(f"TIMETRACK STATISTICS")
@@ -543,6 +660,7 @@ def cmd_stats(args):
 
 def cmd_export(args):
     init_db()
+    user_id = _resolve_user_id(args)
 
     client_id = _resolve_client(args.client) if args.client else None
     project_id = _resolve_project(args.project) if args.project else None
@@ -553,12 +671,14 @@ def cmd_export(args):
         project_id=project_id,
         date_from=args.date_from,
         date_to=args.date_to,
+        user_id=user_id,
     )
 
     if not data:
         print("No entries to export.")
         return
 
+    from lib.storage import EXPORT_DIR
     output_file = args.output or f"timetrack_export.{args.format}"
     output_path = EXPORT_DIR / output_file
 
@@ -566,6 +686,228 @@ def cmd_export(args):
         f.write(data)
 
     print(f"Exported to {output_path}")
+    print(FOOTER)
+
+
+# --- Multi-user commands (manager only) ---
+
+def cmd_user_add(args):
+    init_db()
+
+    # Bootstrap: if no managers exist, anyone can add users
+    if has_managers():
+        user_id = _resolve_user_id(args)
+        try:
+            check_manage_users(user_id)
+        except PermissionDenied as e:
+            print(f"Error: {e}")
+            sys.exit(1)
+
+    save_user(args.user_id, args.name)
+    print(f"User added: {args.name} ({args.user_id})")
+    print(FOOTER)
+
+
+def cmd_user_list(args):
+    init_db()
+
+    users = list_users()
+    if not users:
+        print("No users.")
+        print(FOOTER)
+        return
+
+    print(f"\n{'User ID':<20} {'Name':<25} {'Active':<8} {'Roles':<30}")
+    print("-" * 83)
+
+    for u in users:
+        roles = ', '.join(sorted(get_roles(u['user_id'])))
+        active = "yes" if u['active'] else "no"
+        print(f"{u['user_id']:<20} {u['name'][:24]:<25} {active:<8} {roles:<30}")
+
+    print(f"\nTotal: {len(users)} users")
+    print(FOOTER)
+
+
+def cmd_role_add(args):
+    init_db()
+
+    # Bootstrap: allow self-assigning manager role if no managers exist
+    if has_managers():
+        user_id = _resolve_user_id(args)
+        try:
+            check_manage_users(user_id)
+        except PermissionDenied as e:
+            print(f"Error: {e}")
+            sys.exit(1)
+
+    add_role(args.user_id, args.role)
+    print(f"Role '{args.role}' added to {args.user_id}")
+    print(FOOTER)
+
+
+def cmd_role_remove(args):
+    init_db()
+    user_id = _resolve_user_id(args)
+
+    try:
+        check_manage_users(user_id)
+    except PermissionDenied as e:
+        print(f"Error: {e}")
+        sys.exit(1)
+
+    remove_role(args.user_id, args.role)
+    print(f"Role '{args.role}' removed from {args.user_id}")
+    print(FOOTER)
+
+
+def cmd_assign(args):
+    init_db()
+    user_id = _resolve_user_id(args)
+
+    try:
+        check_manage_users(user_id)
+    except PermissionDenied as e:
+        print(f"Error: {e}")
+        sys.exit(1)
+
+    client_id = _resolve_client(args.client)
+    if not client_id:
+        print(f"Client '{args.client}' not found.")
+        sys.exit(1)
+    project_id = _resolve_project(args.project) if args.project else None
+
+    add_assignment(args.user_id, client_id, project_id)
+    print(f"Assigned {args.user_id} to {args.client}", end="")
+    if args.project:
+        print(f" / {args.project}", end="")
+    print()
+    print(FOOTER)
+
+
+def cmd_unassign(args):
+    init_db()
+    user_id = _resolve_user_id(args)
+
+    try:
+        check_manage_users(user_id)
+    except PermissionDenied as e:
+        print(f"Error: {e}")
+        sys.exit(1)
+
+    client_id = _resolve_client(args.client)
+    project_id = _resolve_project(args.project) if args.project else None
+
+    remove_assignment(args.user_id, client_id, project_id)
+    print(f"Unassigned {args.user_id} from {args.client}", end="")
+    if args.project:
+        print(f" / {args.project}", end="")
+    print()
+    print(FOOTER)
+
+
+def cmd_assignments(args):
+    init_db()
+
+    target_user = getattr(args, 'user_id', None)
+    assignments = get_assignments(user_id=target_user)
+
+    if not assignments:
+        print("No assignments.")
+        print(FOOTER)
+        return
+
+    print(f"\n{'User':<20} {'Client':<20} {'Project':<25}")
+    print("-" * 65)
+
+    for a in assignments:
+        user = a.get('user_name', a['user_id'])
+        client = (a.get('client_name') or "")[:19]
+        project = (a.get('project_name') or "* (all)")[:24]
+        print(f"{user:<20} {client:<20} {project:<25}")
+
+    print(f"\nTotal: {len(assignments)} assignments")
+    print(FOOTER)
+
+
+# --- Settings commands (manager only) ---
+
+def cmd_setting_get(args):
+    init_db()
+    value = get_setting(args.key)
+    if value is not None:
+        print(f"{args.key} = {value}")
+    else:
+        print(f"Setting '{args.key}' not found.")
+    print(FOOTER)
+
+
+def cmd_setting_set(args):
+    init_db()
+    user_id = _resolve_user_id(args)
+
+    try:
+        check_manage_settings(user_id)
+    except PermissionDenied as e:
+        print(f"Error: {e}")
+        sys.exit(1)
+
+    set_setting(args.key, args.value)
+    print(f"Setting '{args.key}' updated to '{args.value}'")
+    print(FOOTER)
+
+
+def cmd_settings(args):
+    init_db()
+
+    settings = list_settings()
+    print(f"\n{'Key':<20} {'Value':<20} {'Updated':<20}")
+    print("-" * 60)
+
+    for s in settings:
+        print(f"{s['key']:<20} {s['value']:<20} {s['updated_at'] or '-':<20}")
+
+    print(FOOTER)
+
+
+def cmd_category_add(args):
+    init_db()
+    user_id = _resolve_user_id(args)
+
+    try:
+        check_manage_settings(user_id)
+    except PermissionDenied as e:
+        print(f"Error: {e}")
+        sys.exit(1)
+
+    add_category(args.name)
+    print(f"Category '{args.name}' added.")
+    print(FOOTER)
+
+
+def cmd_category_remove(args):
+    init_db()
+    user_id = _resolve_user_id(args)
+
+    try:
+        check_manage_settings(user_id)
+    except PermissionDenied as e:
+        print(f"Error: {e}")
+        sys.exit(1)
+
+    deactivate_category(args.name)
+    print(f"Category '{args.name}' deactivated.")
+    print(FOOTER)
+
+
+def cmd_categories(args):
+    init_db()
+
+    cats = get_categories()
+    print("\nCategories:")
+    for c in cats:
+        print(f"  - {c}")
+    print(f"\nTotal: {len(cats)}")
     print(FOOTER)
 
 
@@ -578,58 +920,71 @@ def main():
     )
     subparsers = parser.add_subparsers(dest='command', help='Commands')
 
-    # START
-    p = subparsers.add_parser('start', help='Start a timer')
+    # Common user arg helper
+    def add_user_arg(p):
+        p.add_argument('--user', help='User ID (or set HERMES_SESSION_USER_ID)')
+
+    # START (deprecated in multi-user)
+    p = subparsers.add_parser('start', help='Start a timer (deprecated in multi-user)')
     p.add_argument('description', help='What you are working on')
     p.add_argument('--client', help='Client name')
     p.add_argument('--project', help='Project name')
-    p.add_argument('--category', default='other', choices=CATEGORIES, help='Activity category')
+    p.add_argument('--category', default='other', help='Activity category')
     p.add_argument('--tags', help='Comma-separated tags')
     p.add_argument('--non-billable', action='store_true', help='Mark as non-billable')
+    add_user_arg(p)
     p.set_defaults(func=cmd_start)
 
-    # STOP
-    p = subparsers.add_parser('stop', help='Stop the active timer')
+    # STOP (deprecated in multi-user)
+    p = subparsers.add_parser('stop', help='Stop the active timer (deprecated in multi-user)')
     p.add_argument('--notes', help='Notes about the work done')
+    add_user_arg(p)
     p.set_defaults(func=cmd_stop)
 
-    # STATUS
-    p = subparsers.add_parser('status', help='Show active timer')
+    # STATUS (deprecated in multi-user)
+    p = subparsers.add_parser('status', help='Show active timer (deprecated in multi-user)')
+    add_user_arg(p)
     p.set_defaults(func=cmd_status)
 
-    # CANCEL
-    p = subparsers.add_parser('cancel', help='Cancel active timer without saving')
+    # CANCEL (deprecated in multi-user)
+    p = subparsers.add_parser('cancel', help='Cancel active timer (deprecated in multi-user)')
+    add_user_arg(p)
     p.set_defaults(func=cmd_cancel)
 
     # LOG
     p = subparsers.add_parser('log', help='Log time manually')
     p.add_argument('description', help='What you worked on')
     p.add_argument('duration', help='Duration (e.g., 2h, 90m, 1h30m)')
-    p.add_argument('--client', help='Client name')
-    p.add_argument('--project', help='Project name')
-    p.add_argument('--category', default='other', choices=CATEGORIES, help='Activity category')
+    p.add_argument('--client', help='Client name (required in multi-user)')
+    p.add_argument('--project', help='Project name (required in multi-user)')
+    p.add_argument('--category', default='other', help='Activity category')
     p.add_argument('--tags', help='Comma-separated tags')
     p.add_argument('--notes', help='Additional notes')
     p.add_argument('--date', help='Date (YYYY-MM-DD, default: today)')
     p.add_argument('--rate', type=float, help='Override hourly rate')
     p.add_argument('--non-billable', action='store_true', help='Mark as non-billable')
+    p.add_argument('--external-id', help='External reference (JIRA ticket, etc.)')
+    add_user_arg(p)
     p.set_defaults(func=cmd_log)
 
     # SHOW
     p = subparsers.add_parser('show', help='Show entry details')
     p.add_argument('id', type=int, help='Entry ID')
+    add_user_arg(p)
     p.set_defaults(func=cmd_show)
 
     # LIST
     p = subparsers.add_parser('list', help='List time entries')
     p.add_argument('--client', help='Filter by client')
     p.add_argument('--project', help='Filter by project')
-    p.add_argument('--category', choices=CATEGORIES, help='Filter by category')
+    p.add_argument('--category', help='Filter by category')
     p.add_argument('--billable', action='store_true', help='Only billable')
     p.add_argument('--non-billable', action='store_true', help='Only non-billable')
     p.add_argument('--date-from', help='From date (YYYY-MM-DD)')
     p.add_argument('--date-to', help='To date (YYYY-MM-DD)')
+    p.add_argument('--external-id', help='Filter by external ID')
     p.add_argument('--limit', type=int, default=50, help='Max results')
+    add_user_arg(p)
     p.set_defaults(func=cmd_list)
 
     # EDIT
@@ -637,33 +992,38 @@ def main():
     p.add_argument('id', type=int, help='Entry ID')
     p.add_argument('--description', help='New description')
     p.add_argument('--duration', help='New duration')
-    p.add_argument('--category', choices=CATEGORIES, help='New category')
+    p.add_argument('--category', help='New category')
     p.add_argument('--client', help='New client')
     p.add_argument('--project', help='New project')
     p.add_argument('--notes', help='New notes')
     p.add_argument('--tags', help='New tags')
     p.add_argument('--rate', type=float, help='New rate')
+    p.add_argument('--external-id', help='New external ID')
     p.add_argument('--billable', action='store_true', help='Mark billable')
     p.add_argument('--non-billable', action='store_true', help='Mark non-billable')
+    add_user_arg(p)
     p.set_defaults(func=cmd_edit)
 
     # DELETE
     p = subparsers.add_parser('delete', help='Delete an entry')
     p.add_argument('id', type=int, help='Entry ID')
     p.add_argument('--confirm', action='store_true', help='Confirm deletion')
+    add_user_arg(p)
     p.set_defaults(func=cmd_delete)
 
     # SEARCH
     p = subparsers.add_parser('search', help='Search entries')
     p.add_argument('query', help='Search query')
+    add_user_arg(p)
     p.set_defaults(func=cmd_search)
 
     # CLIENT ADD
-    p = subparsers.add_parser('client-add', help='Add a client')
+    p = subparsers.add_parser('client-add', help='Add a client (manager only)')
     p.add_argument('name', help='Client name')
     p.add_argument('--rate', type=float, help='Default hourly rate')
     p.add_argument('--email', help='Contact email')
     p.add_argument('--notes', help='Notes')
+    add_user_arg(p)
     p.set_defaults(func=cmd_client_add)
 
     # CLIENTS
@@ -671,12 +1031,13 @@ def main():
     p.set_defaults(func=cmd_clients)
 
     # PROJECT ADD
-    p = subparsers.add_parser('project-add', help='Add a project')
+    p = subparsers.add_parser('project-add', help='Add a project (manager only)')
     p.add_argument('name', help='Project name')
     p.add_argument('--client', help='Client name')
     p.add_argument('--rate', type=float, help='Project hourly rate')
     p.add_argument('--budget', type=float, help='Budget in hours')
     p.add_argument('--notes', help='Notes')
+    add_user_arg(p)
     p.set_defaults(func=cmd_project_add)
 
     # PROJECTS
@@ -691,11 +1052,14 @@ def main():
     p.add_argument('--date-from', help='From date (YYYY-MM-DD)')
     p.add_argument('--date-to', help='To date (YYYY-MM-DD)')
     p.add_argument('--billable', action='store_true', help='Only billable entries')
-    p.add_argument('--round-up', action='store_true', help=f'Round to {ROUND_TO_MINUTES}min blocks')
+    p.add_argument('--round-up', action='store_true', help='Round to configured minutes')
+    p.add_argument('--team', action='store_true', help='Show team-wide summary')
+    add_user_arg(p)
     p.set_defaults(func=cmd_summary)
 
     # STATS
     p = subparsers.add_parser('stats', help='Show statistics')
+    add_user_arg(p)
     p.set_defaults(func=cmd_stats)
 
     # EXPORT
@@ -706,7 +1070,88 @@ def main():
     p.add_argument('--date-from', help='From date')
     p.add_argument('--date-to', help='To date')
     p.add_argument('--output', help='Output filename')
+    add_user_arg(p)
     p.set_defaults(func=cmd_export)
+
+    # --- Multi-user commands ---
+
+    # USER ADD
+    p = subparsers.add_parser('user-add', help='Register a user')
+    p.add_argument('user_id', help='User ID (e.g., Mattermost ID)')
+    p.add_argument('--name', required=True, help='Display name')
+    add_user_arg(p)
+    p.set_defaults(func=cmd_user_add)
+
+    # USER LIST
+    p = subparsers.add_parser('user-list', help='List users and roles')
+    p.set_defaults(func=cmd_user_list)
+
+    # ROLE ADD
+    p = subparsers.add_parser('role-add', help='Assign a role to a user (manager only)')
+    p.add_argument('user_id', help='User ID')
+    p.add_argument('role', choices=['manager', 'timekeeper', 'collaborator'], help='Role')
+    add_user_arg(p)
+    p.set_defaults(func=cmd_role_add)
+
+    # ROLE REMOVE
+    p = subparsers.add_parser('role-remove', help='Remove a role from a user (manager only)')
+    p.add_argument('user_id', help='User ID')
+    p.add_argument('role', choices=['manager', 'timekeeper', 'collaborator'], help='Role')
+    add_user_arg(p)
+    p.set_defaults(func=cmd_role_remove)
+
+    # ASSIGN
+    p = subparsers.add_parser('assign', help='Assign user to client/project (manager only)')
+    p.add_argument('user_id', help='User ID')
+    p.add_argument('--client', required=True, help='Client name')
+    p.add_argument('--project', help='Project name (omit for all projects)')
+    add_user_arg(p)
+    p.set_defaults(func=cmd_assign)
+
+    # UNASSIGN
+    p = subparsers.add_parser('unassign', help='Remove user assignment (manager only)')
+    p.add_argument('user_id', help='User ID')
+    p.add_argument('--client', required=True, help='Client name')
+    p.add_argument('--project', help='Project name')
+    add_user_arg(p)
+    p.set_defaults(func=cmd_unassign)
+
+    # ASSIGNMENTS
+    p = subparsers.add_parser('assignments', help='List assignments')
+    p.add_argument('user_id', nargs='?', help='User ID (omit for all)')
+    p.set_defaults(func=cmd_assignments)
+
+    # SETTING GET
+    p = subparsers.add_parser('setting-get', help='Get a setting value')
+    p.add_argument('key', help='Setting key')
+    p.set_defaults(func=cmd_setting_get)
+
+    # SETTING SET
+    p = subparsers.add_parser('setting-set', help='Set a setting value (manager only)')
+    p.add_argument('key', help='Setting key')
+    p.add_argument('value', help='Setting value')
+    add_user_arg(p)
+    p.set_defaults(func=cmd_setting_set)
+
+    # SETTINGS
+    p = subparsers.add_parser('settings', help='List all settings')
+    p.set_defaults(func=cmd_settings)
+
+    # CATEGORY ADD
+    p = subparsers.add_parser('category-add', help='Add a category (manager only)')
+    p.add_argument('name', help='Category name')
+    add_user_arg(p)
+    p.set_defaults(func=cmd_category_add)
+
+    # CATEGORY REMOVE
+    p = subparsers.add_parser('category-remove', help='Deactivate a category (manager only)')
+    p.add_argument('name', help='Category name')
+    add_user_arg(p)
+    p.set_defaults(func=cmd_category_remove)
+
+    # CATEGORIES
+    p = subparsers.add_parser('categories', help='List categories')
+    p.set_defaults(func=cmd_categories)
 
     args = parser.parse_args()
 
@@ -719,6 +1164,9 @@ def main():
     except KeyboardInterrupt:
         print("\nInterrupted.")
         sys.exit(130)
+    except PermissionDenied as e:
+        print(f"Permission denied: {e}")
+        sys.exit(3)
     except Exception as e:
         print(f"Error: {e}", file=sys.stderr)
         sys.exit(1)
