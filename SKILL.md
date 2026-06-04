@@ -103,6 +103,7 @@ nex-timetrack log "Task" 2h --client "Acme" --project "Web" --external-id "JIRA-
 | Command | What it does |
 |---------|-------------|
 | `client-add` | Add a client with rate |
+| `client-rename` | Rename a client (manager only) |
 | `clients` | List all clients |
 | `project-add` | Add a project |
 | `projects` | List all projects |

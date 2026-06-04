@@ -699,6 +699,13 @@ def list_clients():
         return [dict(row) for row in cursor.fetchall()]
 
 
+def rename_client(client_id, new_name):
+    with _connect() as conn:
+        cursor = conn.cursor()
+        cursor.execute("UPDATE clients SET name = ? WHERE id = ?", (new_name, client_id))
+        return cursor.rowcount > 0
+
+
 # --- Projects ---
 
 def save_project(name, client_id=None, rate=None, budget_hours=None, notes=None):

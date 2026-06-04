@@ -16,7 +16,7 @@ from lib.storage import (
     init_db, start_timer, stop_timer, get_active_timer, cancel_timer,
     save_entry, get_entry, list_entries, update_entry, delete_entry,
     search_entries, save_client, get_client, find_client_by_name,
-    list_clients, save_project, get_project, find_project_by_name,
+    list_clients, rename_client, save_project, get_project, find_project_by_name,
     list_projects, get_summary, get_stats, export_entries,
     get_setting, set_setting, list_settings,
     get_categories, add_category, deactivate_category,
@@ -502,6 +502,29 @@ def cmd_clients(args):
         print(f"{c['id']:<5} {c['name'][:24]:<25} {rate:<12} {email:<30}")
 
     print(f"\nTotal: {len(clients)} clients")
+    print(FOOTER)
+
+
+def cmd_client_rename(args):
+    init_db()
+    user_id = _resolve_user_id(args)
+
+    try:
+        check_manage_clients(user_id)
+    except PermissionDenied as e:
+        print(f"Error: {e}")
+        sys.exit(1)
+
+    client_id = _resolve_client(args.client)
+    if not client_id:
+        print(f"Client '{args.client}' not found.")
+        sys.exit(1)
+
+    success = rename_client(client_id, args.new_name)
+    if success:
+        print(f"Client renamed: {args.client} → {args.new_name}")
+    else:
+        print(f"Failed to rename client.")
     print(FOOTER)
 
 
@@ -1064,6 +1087,13 @@ def main():
     # CLIENTS
     p = subparsers.add_parser('clients', help='List clients')
     p.set_defaults(func=cmd_clients)
+
+    # CLIENT RENAME
+    p = subparsers.add_parser('client-rename', help='Rename a client (manager only)')
+    p.add_argument('client', help='Current client name')
+    p.add_argument('new_name', help='New client name')
+    add_user_arg(p)
+    p.set_defaults(func=cmd_client_rename)
 
     # PROJECT ADD
     p = subparsers.add_parser('project-add', help='Add a project (manager only)')
