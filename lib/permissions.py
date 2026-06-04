@@ -56,7 +56,7 @@ def require_role(user_id, role):
 
 def check_log_entry(user_id, client_id=None, project_id=None):
     """Check if user can log time. Validates assignment for collaborator/approver.
-    In multi-user, requires client_id, project_id."""
+    In multi-user, requires client_id, project_id. Multi-role: any granting role wins."""
     if not is_multiuser():
         return True
     user_id = require_user(user_id)
@@ -64,8 +64,6 @@ def check_log_entry(user_id, client_id=None, project_id=None):
 
     if 'manager' in roles:
         return True
-    if 'timekeeper' in roles:
-        raise PermissionDenied("Timekeepers cannot log time entries.")
     if 'collaborator' in roles or 'approver' in roles:
         if not client_id or not project_id:
             raise PermissionDenied(
@@ -76,6 +74,8 @@ def check_log_entry(user_id, client_id=None, project_id=None):
                 f"Not assigned to client/project. Use 'assignments' to check."
             )
         return True
+    if 'timekeeper' in roles:
+        raise PermissionDenied("Timekeepers cannot log time entries.")
 
     raise PermissionDenied(f"User {user_id} has no valid role for logging time.")
 
@@ -93,7 +93,8 @@ def check_view_entries(user_id):
 
 
 def check_modify_entry(user_id, entry_user_id):
-    """Check if user can modify a specific entry. Manager can modify any."""
+    """Check if user can modify a specific entry. Manager can modify any.
+    Multi-role: any granting role wins over denying role."""
     if not is_multiuser():
         return True
     user_id = resolve_user(user_id)
@@ -102,12 +103,12 @@ def check_modify_entry(user_id, entry_user_id):
     roles = get_roles(user_id)
     if 'manager' in roles:
         return True
-    if 'timekeeper' in roles:
-        raise PermissionDenied("Timekeepers cannot modify entries.")
     if 'collaborator' in roles or 'approver' in roles:
         if entry_user_id and entry_user_id != user_id:
             raise PermissionDenied("Can only modify own entries.")
         return True
+    if 'timekeeper' in roles:
+        raise PermissionDenied("Timekeepers cannot modify entries.")
     return True
 
 

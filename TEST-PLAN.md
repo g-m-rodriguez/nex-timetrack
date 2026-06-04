@@ -54,6 +54,22 @@ Todos los casos de uso válidos e inválidos, codificados TST-XXX para automatiz
 
 ---
 
+## 3a. Multi-role
+
+| ID | Tipo | Descripción | Precondiciones | Resultado esperado |
+|----|------|-------------|----------------|--------------------|
+| TST-023a | ✅ | collaborator+approver log time | Dual role asignado a proyecto | Entry logged |
+| TST-023b | ✅ | timekeeper+collaborator log time | Dual role asignado a proyecto | collaborator wins, entry logged |
+| TST-023c | ✅ | timekeeper+collaborator modify own | Dual role con entry propia | collaborator wins, entry updated |
+| TST-023d | ✅ | manager+timekeeper log time | Manager con rol extra timekeeper | manager wins, entry logged |
+| TST-023e | ✅ | collaborator+approver approve | Approval workflow on, col entry pending | Entry approved |
+| TST-023f | ❌ | timekeeper solo no puede log | timekeeper asignado a proyecto | PermissionDenied: timekeeper |
+| TST-023g | ✅ | timekeeper+approver log | Dual role asignado a proyecto | approver wins, entry logged |
+| TST-023h | ❌ | collaborator sin asignación no puede log | collaborator sin assign | PermissionDenied: not assigned |
+| TST-023i | ❌ | timekeeper solo no puede modificar | timekeeper intenta editar entry | PermissionDenied: timekeeper |
+
+---
+
 ## 4. Clients CRUD
 
 | ID | Tipo | Descripción | Caller | Resultado esperado |
@@ -344,11 +360,6 @@ Todos los casos de uso válidos e inválidos, codificados TST-XXX para automatiz
 | TST-174 | ✅ | log sin --user, sin users en DB | Entry creada sin user_id |
 | TST-175 | ✅ | list sin --user | Todas las entries |
 | TST-176 | ✅ | show sin --user | Detalle completo |
-| TST-177 | ✅ | Timer: start → status → stop | Entry creada desde timer |
-| TST-178 | ✅ | Timer: start → cancel | No entry creada |
-| TST-179 | ❌ | Timer: stop sin timer activo | "No active timer." |
-| TST-180 | ❌ | Timer: cancel sin timer activo | "No active timer." |
-| TST-181 | ✅ | Timer: start con timer activo | "Timer already running" |
 
 ---
 
@@ -382,6 +393,7 @@ Todos los casos de uso válidos e inválidos, codificados TST-XXX para automatiz
 | Bootstrap | 5 | 3 | 2 |
 | Users CRUD | 10 | 5 | 5 |
 | Roles | 8 | 6 | 2 |
+| Multi-role | 9 | 6 | 3 |
 | Clients CRUD | 11 | 6 | 5 |
 | Projects CRUD | 11 | 6 | 5 |
 | Assignments | 6 | 5 | 1 |
@@ -401,7 +413,7 @@ Todos los casos de uso válidos e inválidos, codificados TST-XXX para automatiz
 | Reporting | 7 | 6 | 1 |
 | Export | 5 | 5 | 0 |
 | Rate cascade | 4 | 4 | 0 |
-| Single-user | 8 | 7 | 1 |
+| Single-user | 3 | 3 | 0 |
 | Timer deprecation | 4 | 4 | 0 |
 | Duration parsing | 5 | 5 | 0 |
-| **Total** | **190** | **123** | **67** |
+| **Total** | **194** | **127** | **67** |

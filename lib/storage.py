@@ -216,7 +216,7 @@ def init_db():
         # Migration: expand user_roles CHECK to include 'approver'
         conn.execute("SAVEPOINT check_approver")
         try:
-            conn.execute("INSERT OR IGNORE INTO user_roles (user_id, role) VALUES ('__mig_test__', 'approver')")
+            conn.execute("INSERT INTO user_roles (user_id, role) VALUES ('__mig_test__', 'approver')")
             conn.execute("DELETE FROM user_roles WHERE user_id = '__mig_test__' AND role = 'approver'")
         except Exception:
             conn.execute("ROLLBACK TO check_approver")
@@ -253,6 +253,8 @@ def get_setting(key, default=None):
         if row:
             cast = SETTING_TYPE_MAP.get(key)
             if cast:
+                if cast is bool:
+                    return row['value'].lower() == 'true'
                 return cast(row['value'])
             return row['value']
     if default is not None:

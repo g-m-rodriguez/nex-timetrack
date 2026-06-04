@@ -36,7 +36,7 @@ from lib.permissions import (
     check_approve_entry, check_view_approvals,
 )
 
-FOOTER = "[Timetrack by Nex AI | nex-ai.be]"
+FOOTER = ""
 SEPARATOR = "=" * 60
 SUBSEPARATOR = "-" * 60
 
