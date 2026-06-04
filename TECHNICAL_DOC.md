@@ -465,20 +465,52 @@ Entry.rate (override manual)
 
 **Roles**:
 
-| Acción | Manager | Timekeeper | Collaborator | Approver |
-|--------|---------|------------|--------------|----------|
-| `log` | ✅ any | ❌ | ✅ assigned only | ✅ assigned only |
-| `list`/`search` | ✅ all | ✅ all | ✅ own | ✅ all |
-| `edit`/`delete` | ✅ any | ❌ | ✅ own | ✅ own |
-| `summary --team` | ✅ | ✅ | ❌ | ✅ |
-| `client-add`/`project-add` | ✅ | ❌ | ❌ | ❌ |
-| User/role/assign management | ✅ | ❌ | ❌ | ❌ |
-| Settings/categories | ✅ | ❌ | ❌ | ❌ |
-| Approve/reject entries | ✅ any | ❌ | ❌ | ✅ assigned scope |
-| View approval queue | ✅ | ✅ | ❌ | ✅ |
-| View own rejections | ✅ | ✅ | ✅ | ✅ |
+| Acción | Manager | Timekeeper | Collaborator | Approver | Notas |
+|--------|---------|------------|--------------|----------|-------|
+| `log` | ✅ any client/project | ❌ | ✅ assigned only | ✅ assigned only | ❌ si client o project inactivo |
+| `list`/`search` | ✅ all | ✅ all | ✅ own | ✅ all | |
+| `show` | ✅ | ✅ | ✅ own | ✅ | Muestra approval_status si workflow activo |
+| `edit` | ✅ any entry | ❌ | ✅ own | ✅ own | ❌ si client inactivo. Resetea approval a pending. Warning al editar approved/rejected. |
+| `delete` | ✅ any entry (`--confirm`) | ❌ | ✅ own (`--confirm`) | ✅ own (`--confirm`) | CASCADE delete en entry_approvals |
+| `summary` | ✅ own | ✅ own | ✅ own | ✅ own | |
+| `summary --team` | ✅ | ✅ | ❌ | ✅ | |
+| `stats` | ✅ all | ✅ all | ✅ own | ✅ all | |
+| `export` | ✅ all | ✅ all | ✅ own | ✅ all | |
+| `client-add`/`client-rename` | ✅ | ❌ | ❌ | ❌ | |
+| `client-deactivate`/`client-reactivate` | ✅ (`--confirm`) | ❌ | ❌ | ❌ | Deactivate bloquea proyectos y time logging |
+| `project-add` | ✅ | ❌ | ❌ | ❌ | ❌ si client inactivo |
+| `project-deactivate`/`project-reactivate` | ✅ (`--confirm`) | ❌ | ❌ | ❌ | Deactivate bloquea time logging. Client debe estar activo. |
+| `clients`/`projects` | ✅ | ✅ | ✅ | ✅ | |
+| `user-add` | ✅ | ❌ | ❌ | ❌ | Bootstrap: sin managers → cualquiera puede agregar |
+| `user-list` | ✅ | ✅ | ❌ | ✅ | |
+| `user-deactivate` | ✅ (`--confirm`) | ❌ | ❌ | ❌ | |
+| `role-add`/`role-remove` | ✅ | ❌ | ❌ | ❌ | Bootstrap: sin managers → auto-asignar |
+| `assign`/`unassign` | ✅ | ❌ | ❌ | ❌ | |
+| `assignments` | ✅ | ❌ | ❌ | ❌ | |
+| `settings`/`setting-get` | ✅ | ✅ | ✅ | ✅ | |
+| `setting-set` | ✅ | ❌ | ❌ | ❌ | |
+| `categories` | ✅ | ✅ | ✅ | ✅ | |
+| `category-add`/`category-remove` | ✅ | ❌ | ❌ | ❌ | |
+| `pending` (view queue) | ✅ all | ✅ all | ❌ | ✅ assigned scope | Solo si `approval_required=true` |
+| `approve` | ✅ any (incl. own) | ❌ | ❌ | ✅ assigned scope (not own) | Solo si `approval_required=true`. Entry debe estar `pending`. |
+| `reject` | ✅ any (incl. own) | ❌ | ❌ | ✅ assigned scope (not own) | Solo si `approval_required=true`. Requiere `--reason`. Entry debe estar `pending`. |
+| `rejections` (own) | ✅ | ✅ | ✅ | ✅ | Muestra entries propias rechazadas con motivo |
+| `approval-history` | ✅ | ✅ | ✅ | ✅ | |
 
 **Bootstrap**: si `has_managers()` retorna False, `user-add` y `role-add` no requieren permisos. Primer usuario se auto-asigna manager.
+
+**Guards adicionales por estado**:
+
+| Condición | Efecto |
+|-----------|--------|
+| Client inactivo | ❌ No se puede loguear tiempo, crear proyectos, ni editar entries existentes |
+| Project inactivo | ❌ No se puede loguear tiempo |
+| User inactivo | ❌ `resolve_user()` lanza PermissionDenied |
+| `approval_required=false` | Entries nuevas nacen `approved`. Comandos approve/reject/pending avisan que workflow no está habilitado. |
+| `approval_required=true` | Entries nuevas nacen `pending`. Editar entry approved/rejected → resetea a pending. |
+| Entry status `pending` | Solo se puede approve/reject. No bloquea edit/delete. |
+| Entry status `approved` | Edit → resetea a `pending` + warning. Approve/reject → error "already approved". |
+| Entry status `rejected` | Edit → resetea a `pending` + warning. Approve/reject → error "already rejected". |
 
 ### Approval Workflow
 
