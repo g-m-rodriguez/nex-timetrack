@@ -16,7 +16,7 @@ from lib.storage import (
     init_db, start_timer, stop_timer, get_active_timer, cancel_timer,
     save_entry, get_entry, list_entries, update_entry, delete_entry,
     search_entries, save_client, get_client, find_client_by_name,
-    list_clients, rename_client, deactivate_client, is_client_active,
+    list_clients, rename_client, deactivate_client, reactivate_client, is_client_active,
     save_project, get_project, find_project_by_name,
     list_projects, get_summary, get_stats, export_entries,
     get_setting, set_setting, list_settings,
@@ -567,6 +567,29 @@ def cmd_client_deactivate(args):
         print(f"Client deactivated. Projects and time logging blocked.")
     else:
         print(f"Failed to deactivate client.")
+    print(FOOTER)
+
+
+def cmd_client_reactivate(args):
+    init_db()
+    user_id = _resolve_user_id(args)
+
+    try:
+        check_manage_clients(user_id)
+    except PermissionDenied as e:
+        print(f"Error: {e}")
+        sys.exit(1)
+
+    client_id = _resolve_client(args.client)
+    if not client_id:
+        print(f"Client '{args.client}' not found.")
+        sys.exit(1)
+
+    success = reactivate_client(client_id)
+    if success:
+        print(f"Client reactivated. Projects and time logging enabled.")
+    else:
+        print(f"Failed to reactivate client.")
     print(FOOTER)
 
 
@@ -1147,6 +1170,12 @@ def main():
     p.add_argument('--confirm', action='store_true', help='Confirm deactivation')
     add_user_arg(p)
     p.set_defaults(func=cmd_client_deactivate)
+
+    # CLIENT REACTIVATE
+    p = subparsers.add_parser('client-reactivate', help='Reactivate a deactivated client (manager only)')
+    p.add_argument('client', help='Client name')
+    add_user_arg(p)
+    p.set_defaults(func=cmd_client_reactivate)
 
     # PROJECT ADD
     p = subparsers.add_parser('project-add', help='Add a project (manager only)')

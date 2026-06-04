@@ -715,6 +715,13 @@ def deactivate_client(client_id):
         return cursor.rowcount > 0
 
 
+def reactivate_client(client_id):
+    with _connect() as conn:
+        cursor = conn.cursor()
+        cursor.execute("UPDATE clients SET active = 1 WHERE id = ?", (client_id,))
+        return cursor.rowcount > 0
+
+
 def is_client_active(client_id):
     with _connect() as conn:
         cursor = conn.cursor()

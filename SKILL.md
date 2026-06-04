@@ -105,6 +105,7 @@ nex-timetrack log "Task" 2h --client "Acme" --project "Web" --external-id "JIRA-
 | `client-add` | Add a client with rate |
 | `client-rename` | Rename a client (manager only) |
 | `client-deactivate` | Deactivate client, blocks projects and time logging (manager only, requires --confirm) |
+| `client-reactivate` | Reactivate a deactivated client (manager only) |
 | `clients` | List all clients |
 | `project-add` | Add a project |
 | `projects` | List all projects |
