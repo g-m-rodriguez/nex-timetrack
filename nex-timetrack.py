@@ -408,10 +408,14 @@ def cmd_edit(args):
         print(f"Error: Client is deactivated. Cannot edit entries.")
         sys.exit(1)
 
-    # Warn if editing approved entry (will reset to pending)
-    if (entry.get('approval_status') in ('approved', 'rejected')
-            and get_setting('approval_required')):
-        print("  Warning: Editing will reset approval status to pending.")
+    # Block editing approved entries; warn for rejected (will reset to pending)
+    if get_setting('approval_required'):
+        status = entry.get('approval_status')
+        if status == 'approved':
+            print("Error: Cannot edit an approved entry. Request rejection first or contact your approver.")
+            sys.exit(1)
+        if status == 'rejected':
+            print("  Warning: Editing will reset approval status to pending.")
 
     updates = {}
     if args.description:

@@ -470,7 +470,7 @@ Entry.rate (override manual)
 | `log` | ✅ any client/project | ❌ | ✅ assigned only | ✅ assigned only | ❌ si client o project inactivo |
 | `list`/`search` | ✅ all | ✅ all | ✅ own | ✅ all | |
 | `show` | ✅ | ✅ | ✅ own | ✅ | Muestra approval_status si workflow activo |
-| `edit` | ✅ any entry | ❌ | ✅ own | ✅ own | ❌ si client inactivo. Resetea approval a pending. Warning al editar approved/rejected. |
+| `edit` | ✅ any entry | ❌ | ✅ own | ✅ own | ❌ si client inactivo. ❌ si entry `approved` (requiere rechazo primero). Warning si entry `rejected` (resetea a pending). |
 | `delete` | ✅ any entry (`--confirm`) | ❌ | ✅ own (`--confirm`) | ✅ own (`--confirm`) | CASCADE delete en entry_approvals |
 | `summary` | ✅ own | ✅ own | ✅ own | ✅ own | |
 | `summary --team` | ✅ | ✅ | ❌ | ✅ | |
@@ -509,7 +509,7 @@ Entry.rate (override manual)
 | `approval_required=false` | Entries nuevas nacen `approved`. Comandos approve/reject/pending avisan que workflow no está habilitado. |
 | `approval_required=true` | Entries nuevas nacen `pending`. Editar entry approved/rejected → resetea a pending. |
 | Entry status `pending` | Solo se puede approve/reject. No bloquea edit/delete. |
-| Entry status `approved` | Edit → resetea a `pending` + warning. Approve/reject → error "already approved". |
+| Entry status `approved` | Edit → **bloqueado** (error). Approve/reject → error "already approved". |
 | Entry status `rejected` | Edit → resetea a `pending` + warning. Approve/reject → error "already rejected". |
 
 ### Approval Workflow
