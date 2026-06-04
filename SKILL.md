@@ -146,9 +146,9 @@ nex-timetrack log "Task" 2h --client "Acme" --project "Web" --external-id "JIRA-
 
 ## Required Fields in Multi-User
 
-When logging time in multi-user mode, these fields are required for collaborators:
-- `--client` — client name
-- `--project` — project name
+When logging time, these fields are always required (all roles):
+- `--client` — client name (required)
+- `--project` — project name (required)
 - `--external-id` — external ticket reference (JIRA, AzureDevOps, GitHub issue, etc.)
 - `description` — what was done
 - `duration` — time spent
@@ -293,6 +293,9 @@ When logging time, the agent MUST use exact values provided by the user. If the 
 - ✅ GOOD: User says "log 2h on Acme website" → agent asks "What did you work on?" and "What's the ticket/task reference?"
 
 If the user explicitly declines to provide an external-id (e.g., "no ticket for this"), proceed without it. But never skip the question.
+
+### 6. Always pass client and project when logging time
+`--client` and `--project` are required fields for every time entry (all roles). If the user does not specify them, ask before proceeding. Never log time without a client and project.
 
 ## Error Handling
 

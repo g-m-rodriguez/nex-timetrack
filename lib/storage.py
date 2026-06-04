@@ -93,8 +93,8 @@ def init_db():
 
             CREATE TABLE IF NOT EXISTS entries (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                project_id INTEGER,
-                client_id INTEGER,
+                project_id INTEGER NOT NULL,
+                client_id INTEGER NOT NULL,
                 description TEXT NOT NULL,
                 category TEXT DEFAULT 'other',
                 started_at TEXT,
@@ -498,6 +498,10 @@ def cancel_timer():
 def save_entry(description, duration_minutes, project_id=None, client_id=None,
                category="other", billable=True, tags=None, notes=None,
                entry_date=None, rate=None, user_id=None, external_id=None):
+    if not client_id:
+        raise ValueError("client_id is required")
+    if not project_id:
+        raise ValueError("project_id is required")
     if not entry_date:
         entry_date = dt.date.today().isoformat()
 
@@ -604,6 +608,11 @@ def update_entry(entry_id, **kwargs):
     fields = {k: v for k, v in kwargs.items() if k in allowed}
     if not fields:
         return False
+
+    if 'client_id' in fields and fields['client_id'] is None:
+        raise ValueError("client_id cannot be null")
+    if 'project_id' in fields and fields['project_id'] is None:
+        raise ValueError("project_id cannot be null")
 
     if 'billable' in fields:
         fields['billable'] = 1 if fields['billable'] else 0

@@ -227,6 +227,13 @@ def cmd_log(args):
     project_id = _resolve_project(args.project)
     billable = not args.non_billable
 
+    if not client_id:
+        print("Error: --client is required.")
+        sys.exit(1)
+    if not project_id:
+        print("Error: --project is required.")
+        sys.exit(1)
+
     if client_id and not is_client_active(client_id):
         print(f"Error: Client is deactivated. Time logging not allowed.")
         sys.exit(1)
