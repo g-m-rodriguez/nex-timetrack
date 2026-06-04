@@ -282,6 +282,7 @@ def cmd_log(args):
 
 def cmd_show(args):
     init_db()
+    caller_id = _resolve_user_id(args)
 
     entry = get_entry(args.id)
     if not entry:
@@ -323,7 +324,11 @@ def cmd_show(args):
                 latest = history[0]
                 approver = latest.get('approver_id', 'unknown')
                 reason = latest.get('reason', 'No reason given')
-                print(f"  Rejected by {approver}: {reason}")
+                is_manager = caller_id and 'manager' in get_roles(caller_id)
+                if is_manager:
+                    print(f"  Rejected by {approver}: {reason}")
+                else:
+                    print(f"  Rejected: {reason}")
 
     print(f"\n{FOOTER}")
 
@@ -1090,13 +1095,22 @@ def cmd_user_list(args):
         print(FOOTER)
         return
 
-    print(f"\n{'User ID':<20} {'Name':<25} {'Active':<8} {'Roles':<30}")
-    print("-" * 83)
+    is_manager = 'manager' in get_roles(user_id)
 
-    for u in users:
-        roles = ', '.join(sorted(get_roles(u['user_id'])))
-        active = "yes" if u['active'] else "no"
-        print(f"{u['user_id']:<20} {u['name'][:24]:<25} {active:<8} {roles:<30}")
+    if is_manager:
+        print(f"\n{'User ID':<20} {'Name':<25} {'Active':<8} {'Roles':<30}")
+        print("-" * 83)
+        for u in users:
+            roles = ', '.join(sorted(get_roles(u['user_id'])))
+            active = "yes" if u['active'] else "no"
+            print(f"{u['user_id']:<20} {u['name'][:24]:<25} {active:<8} {roles:<30}")
+    else:
+        print(f"\n{'Name':<25} {'Active':<8} {'Roles':<30}")
+        print("-" * 63)
+        for u in users:
+            roles = ', '.join(sorted(get_roles(u['user_id'])))
+            active = "yes" if u['active'] else "no"
+            print(f"{u['name'][:24]:<25} {active:<8} {roles:<30}")
 
     print(f"\nTotal: {len(users)} users")
     print(FOOTER)
