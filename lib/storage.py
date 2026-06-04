@@ -23,6 +23,7 @@ EXPORT_DIR = DATA_DIR / "exports"
 SETTING_TYPE_MAP = {
     'default_rate': float,
     'round_to_minutes': int,
+    'approval_required': bool,
 }
 
 SETTING_DEFAULTS = {
@@ -30,6 +31,7 @@ SETTING_DEFAULTS = {
     'currency': 'EUR',
     'currency_symbol': '€',
     'round_to_minutes': 15,
+    'approval_required': False,
 }
 
 CATEGORY_SEED = [
@@ -180,6 +182,20 @@ def init_db():
             CREATE INDEX IF NOT EXISTS idx_assignments_user ON assignments(user_id);
             CREATE INDEX IF NOT EXISTS idx_assignments_client ON assignments(client_id);
             CREATE INDEX IF NOT EXISTS idx_categories_active ON categories(active);
+
+            CREATE TABLE IF NOT EXISTS entry_approvals (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                entry_id INTEGER NOT NULL,
+                approver_id TEXT NOT NULL,
+                action TEXT NOT NULL CHECK(action IN ('approved','rejected')),
+                reason TEXT,
+                approved_at TEXT DEFAULT (datetime('now')),
+                FOREIGN KEY (entry_id) REFERENCES entries(id) ON DELETE CASCADE,
+                FOREIGN KEY (approver_id) REFERENCES users(user_id) ON DELETE CASCADE
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_approvals_entry ON entry_approvals(entry_id);
+            CREATE INDEX IF NOT EXISTS idx_approvals_approver ON entry_approvals(approver_id);
         """)
 
         # Seed settings
@@ -188,6 +204,36 @@ def init_db():
                 "INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)",
                 (key, str(value))
             )
+
+        # Migration: add approval_status column to entries if not exists
+        cursor = conn.cursor()
+        cursor.execute("PRAGMA table_info(entries)")
+        columns = {row[1] for row in cursor.fetchall()}
+        if 'approval_status' not in columns:
+            conn.execute("ALTER TABLE entries ADD COLUMN approval_status TEXT DEFAULT 'pending' CHECK(approval_status IN ('pending','approved','rejected'))")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_entries_approval ON entries(approval_status)")
+
+        # Migration: expand user_roles CHECK to include 'approver'
+        conn.execute("SAVEPOINT check_approver")
+        try:
+            conn.execute("INSERT OR IGNORE INTO user_roles (user_id, role) VALUES ('__mig_test__', 'approver')")
+            conn.execute("DELETE FROM user_roles WHERE user_id = '__mig_test__' AND role = 'approver'")
+        except Exception:
+            conn.execute("ROLLBACK TO check_approver")
+            conn.execute("""
+                CREATE TABLE user_roles_new (
+                    user_id TEXT NOT NULL,
+                    role TEXT NOT NULL CHECK(role IN ('manager','timekeeper','collaborator','approver')),
+                    PRIMARY KEY (user_id, role),
+                    FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE
+                )
+            """)
+            conn.execute("INSERT INTO user_roles_new SELECT * FROM user_roles")
+            conn.execute("DROP TABLE user_roles")
+            conn.execute("ALTER TABLE user_roles_new RENAME TO user_roles")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_user_roles_user ON user_roles(user_id)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_user_roles_role ON user_roles(role)")
+        conn.execute("RELEASE check_approver")
 
         # Seed categories
         for cat in CATEGORY_SEED:
@@ -512,14 +558,15 @@ def save_entry(description, duration_minutes, project_id=None, client_id=None,
             rate = _resolve_rate(conn, project_id, client_id)
 
         cursor = conn.cursor()
+        approval_status = 'pending' if get_setting('approval_required') else 'approved'
         cursor.execute("""
             INSERT INTO entries (project_id, client_id, description, category,
                                 started_at, duration_minutes, billable, rate,
-                                tags, notes, user_id, external_id)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                tags, notes, user_id, external_id, approval_status)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (project_id, client_id, description, category, started_at,
               duration_minutes, 1 if billable else 0, rate, tags, notes,
-              user_id, external_id))
+              user_id, external_id, approval_status))
         row_id = cursor.lastrowid
         _sync_fts(conn, row_id, description, notes, tags, external_id)
         return row_id
@@ -618,6 +665,10 @@ def update_entry(entry_id, **kwargs):
         fields['billable'] = 1 if fields['billable'] else 0
 
     fields['updated_at'] = dt.datetime.now().isoformat()
+
+    # Reset approval_status to pending when editing an approved/rejected entry
+    fields['approval_status'] = 'pending'
+
     set_clause = ', '.join([f"{k} = ?" for k in fields.keys()])
     values = list(fields.values()) + [entry_id]
 
@@ -673,6 +724,92 @@ def search_entries(query_text, user_id=None):
             base_query += " ORDER BY e.started_at DESC LIMIT 50"
             cursor.execute(base_query, params)
             return [dict(row) for row in cursor.fetchall()]
+
+
+# --- Approvals ---
+
+def record_approval(entry_id, approver_id, action, reason=None):
+    """Record an approval or rejection. Updates entry approval_status."""
+    with _connect() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            INSERT INTO entry_approvals (entry_id, approver_id, action, reason)
+            VALUES (?, ?, ?, ?)
+        """, (entry_id, approver_id, action, reason))
+        conn.execute("""
+            UPDATE entries SET approval_status = ? WHERE id = ?
+        """, (action, entry_id))
+        return cursor.lastrowid
+
+
+def get_pending_entries(approver_id, client_id=None, project_id=None,
+                        for_user=None, date_from=None, date_to=None):
+    """Get pending entries the approver can approve.
+    Joins assignments to scope by client/project.
+    Excludes approver's own entries."""
+    with _connect() as conn:
+        cursor = conn.cursor()
+        query = """
+            SELECT e.*, p.name as project_name, c.name as client_name
+            FROM entries e
+            JOIN assignments a ON e.client_id = a.client_id
+                AND (a.project_id IS NULL OR e.project_id = a.project_id)
+            LEFT JOIN projects p ON e.project_id = p.id
+            LEFT JOIN clients c ON e.client_id = c.id
+            WHERE e.approval_status = 'pending'
+                AND a.user_id = ?
+                AND e.user_id != ?
+        """
+        params = [approver_id, approver_id]
+
+        if client_id:
+            query += " AND e.client_id = ?"
+            params.append(client_id)
+        if project_id:
+            query += " AND e.project_id = ?"
+            params.append(project_id)
+        if for_user:
+            query += " AND e.user_id = ?"
+            params.append(for_user)
+        if date_from:
+            query += " AND e.started_at >= ?"
+            params.append(f"{date_from}T00:00:00")
+        if date_to:
+            query += " AND e.started_at <= ?"
+            params.append(f"{date_to}T23:59:59")
+
+        query += " ORDER BY e.started_at ASC"
+        cursor.execute(query, params)
+        return [dict(row) for row in cursor.fetchall()]
+
+
+def get_approval_history(entry_id):
+    """Get full approval/rejection history for an entry."""
+    with _connect() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT ea.*, u.name as approver_name
+            FROM entry_approvals ea
+            LEFT JOIN users u ON ea.approver_id = u.user_id
+            WHERE ea.entry_id = ?
+            ORDER BY ea.approved_at DESC
+        """, (entry_id,))
+        return [dict(row) for row in cursor.fetchall()]
+
+
+def get_rejected_entries(user_id):
+    """Get rejected entries for a user (collaborator view)."""
+    with _connect() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT e.*, p.name as project_name, c.name as client_name
+            FROM entries e
+            LEFT JOIN projects p ON e.project_id = p.id
+            LEFT JOIN clients c ON e.client_id = c.id
+            WHERE e.user_id = ? AND e.approval_status = 'rejected'
+            ORDER BY e.started_at DESC
+        """, (user_id,))
+        return [dict(row) for row in cursor.fetchall()]
 
 
 # --- Clients ---

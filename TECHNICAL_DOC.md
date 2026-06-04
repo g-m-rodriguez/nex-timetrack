@@ -11,16 +11,14 @@ CLI de time tracking multi-usuario para equipos, freelancers y agencias. Sin dep
 
 ```
 nex-timetrack/
-├── nex-timetrack.py     ← CLI entry point (28 comandos)
+├── nex-timetrack.py     ← CLI entry point (38 comandos)
 ├── lib/
 │   ├── __init__.py      ← Package init
 │   ├── storage.py       ← Capa de datos SQLite + settings + categories
 │   └── permissions.py   ← Capa de permisos centralizada + ROLES
 ├── setup.sh             ← Instalador
 ├── SKILL.md             ← Definición del skill para ClawHub
-├── skill-card.md        ← Metadata del skill para marketplace
-├── _meta.json           ← Metadata del proyecto
-└── LICENSE.txt          ← Licencia AGPL-3.0
+└── skill-card.md        ← Metadata del skill para marketplace
 ```
 
 ### Patrón arquitectónico
@@ -75,7 +73,7 @@ Arquitectura en 3 capas clásica para CLI:
 
 #### Comandos (`cmd_*`)
 
-28 subcomandos organizados en 7 dominios:
+33 subcomandos organizados en 8 dominios:
 
 **Timer** (deprecated en multi-user — se mantiene para backward compat single-user):
 
@@ -90,10 +88,10 @@ Arquitectura en 3 capas clásica para CLI:
 
 | Comando | Handler | Descripción |
 |---------|---------|-------------|
-| `log` | `cmd_log` | Crea entry manual. En multi-user: `--client`, `--project`, `--external-id` requeridos para collaborator. |
+| `log` | `cmd_log` | Crea entry manual. En multi-user: `--client`, `--project`, `--external-id` requeridos para collaborator. Valida client y project activos. |
 | `show` | `cmd_show` | Detalle completo de un entry. Incluye `external_id`. |
 | `list` | `cmd_list` | Lista tabular con filtros. Scope por rol (all/own). Filtro `--external-id`. |
-| `edit` | `cmd_edit` | Actualización parcial. `check_modify_entry()` valida ownership. |
+| `edit` | `cmd_edit` | Actualización parcial. `check_modify_entry()` valida ownership. Bloqueado si client desactivado. |
 | `delete` | `cmd_delete` | Borrado con `--confirm`. `check_modify_entry()` valida ownership. |
 | `search` | `cmd_search` | FTS5 search (incluye `external_id`). Scope por rol. |
 
@@ -102,16 +100,22 @@ Arquitectura en 3 capas clásica para CLI:
 | Comando | Handler | Descripción |
 |---------|---------|-------------|
 | `client-add` | `cmd_client_add` | Crea cliente. `check_manage_clients()`. |
-| `clients` | `cmd_clients` | Lista todos los clientes. |
-| `project-add` | `cmd_project_add` | Crea proyecto. `check_manage_clients()`. |
+| `clients` | `cmd_clients` | Lista todos los clientes con estado Active. |
+| `client-rename` | `cmd_client_rename` | Renombra cliente. Manager only. |
+| `client-deactivate` | `cmd_client_deactivate` | Desactiva cliente (soft delete). Manager only, `--confirm`. Bloquea proyectos y time logging. |
+| `client-reactivate` | `cmd_client_reactivate` | Reactiva cliente desactivado. Manager only. |
+| `project-add` | `cmd_project_add` | Crea proyecto. `check_manage_clients()`. Valida client activo. |
 | `projects` | `cmd_projects` | Lista proyectos (solo activos por defecto). |
+| `project-deactivate` | `cmd_project_deactivate` | Desactiva proyecto. Manager only, `--confirm`. Client debe estar activo. Bloquea time logging. |
+| `project-reactivate` | `cmd_project_reactivate` | Reactiva proyecto desactivado. Manager only. Client debe estar activo. |
 
 **User Management** (manager only):
 
 | Comando | Handler | Descripción |
 |---------|---------|-------------|
 | `user-add` | `cmd_user_add` | Registra usuario. Bootstrap: sin managers → cualquiera puede agregar. |
-| `user-list` | `cmd_user_list` | Lista usuarios con roles. |
+| `user-list` | `cmd_user_list` | Lista usuarios con roles. Manager/timekeeper only. |
+| `user-deactivate` | `cmd_user_deactivate` | Desactiva usuario (soft delete). Manager only, `--confirm`. |
 | `role-add` | `cmd_role_add` | Asigna rol. Bootstrap: sin managers → auto-asignar manager. |
 | `role-remove` | `cmd_role_remove` | Remueve rol. |
 | `assign` | `cmd_assign` | Asigna user a client/project. |
@@ -128,6 +132,16 @@ Arquitectura en 3 capas clásica para CLI:
 | `categories` | `cmd_categories` | Lista categorías activas. |
 | `category-add` | `cmd_category_add` | Agrega categoría. `check_manage_settings()`. |
 | `category-remove` | `cmd_category_remove` | Desactiva categoría (soft delete). `check_manage_settings()`. |
+
+**Approval**:
+
+| Comando | Handler | Descripción |
+|---------|---------|-------------|
+| `pending` | `cmd_pending` | Lista entries pendientes de aprobación. Filtros: `--user`, `--project`, `--client`, `--date-from`, `--date-to`. Requiere rol approver o manager. |
+| `approve` | `cmd_approve` | Aprueba entries por ID. `check_approve_entry()` valida permisos. |
+| `reject` | `cmd_reject` | Rechaza entries con `--reason` requerido. |
+| `rejections` | `cmd_rejections` | Muestra entries propias rechazadas (vista collaborator). |
+| `approval-history` | `cmd_approval_history` | Historial de aprobación/rechazo de un entry. |
 
 **Reporting**:
 
@@ -149,7 +163,7 @@ Arquitectura en 3 capas clásica para CLI:
 **Propósito**: Validación centralizada de permisos. Todas las funciones son no-op en single-user mode.
 
 ```python
-ROLES = ("manager", "timekeeper", "collaborator")
+ROLES = ("manager", "timekeeper", "collaborator", "approver")
 
 class PermissionDenied(Exception): ...  # Exit code 3
 ```
@@ -164,7 +178,10 @@ class PermissionDenied(Exception): ...  # Exit code 3
 | `check_modify_entry(user_id, entry_user_id)` | Manager→cualquiera, Collaborator→solo propias, Timekeeper→denegado. |
 | `check_manage_clients(user_id)` | Manager only. |
 | `check_manage_users(user_id)` | Manager only. |
+| `check_view_users(user_id)` | Manager, timekeeper, or approver. Collaborator blocked. |
 | `check_manage_settings(user_id)` | Manager only. |
+| `check_approve_entry(approver_id, entry_id)` | Valida approver/manager puede aprobar entry. Managers pueden auto-aprobarse. Approvers no. Requiere assignment al client/project (manager exempt). Entry debe estar pending. |
+| `check_view_approvals(user_id)` | Retorna 'all' (manager/approver/timekeeper) o 'own_rejections' (collaborator). |
 
 **Bootstrap**: cuando no hay managers en la DB, `user-add` y `role-add` no requieren permisos. Permite al primer usuario auto-asignar rol manager.
 
@@ -203,9 +220,9 @@ def _connect():
 │ rate         │   └───│ client_id FK │
 │ contact_email│       │ rate         │
 │ notes        │       │ budget_hours │
-│ created_at   │       │ notes        │
-└──────────────┘       │ active       │
-                       │ created_at   │
+│ active       │       │ notes        │
+│ created_at   │       │ active       │
+└──────────────┘       │ created_at   │
                        └──────┬───────┘
                               │
                               ▼
@@ -213,8 +230,8 @@ def _connect():
 │                    entries                        │
 │──────────────────────────────────────────────────│
 │ id PK                                            │
-│ project_id FK → projects.id (ON DELETE SET NULL) │
-│ client_id FK → clients.id (ON DELETE SET NULL)   │
+│ project_id FK → projects.id (NOT NULL)           │
+│ client_id FK → clients.id (NOT NULL)             │
 │ description                                      │
 │ category                                         │
 │ started_at          ─┐                           │
@@ -226,6 +243,7 @@ def _connect():
 │ notes                                            │
 │ user_id          ← usuario que registró          │
 │ external_id      ← JIRA/AzureDevOps/GitHub ref   │
+│ approval_status ← pending/approved/rejected      │
 │ created_at                                       │
 │ updated_at                                       │
 └────────────────────────┬─────────────────────────┘
@@ -236,6 +254,20 @@ def _connect():
 │──────────────────────────────────────────────────│
 │ rowid → entries.id                               │
 │ description, notes, tags, external_id            │
+└──────────────────────────────────────────────────┘
+
+┌──────────────────────────────────────────────────┐
+│            entry_approvals                        │
+│──────────────────────────────────────────────────│
+│ id PK                                            │
+│ entry_id FK → entries.id (ON DELETE CASCADE)     │
+│ approver_id FK → users.user_id (ON DELETE CASCADE)│
+│ action CHECK('approved','rejected')              │
+│ reason TEXT                                      │
+│ approved_at                                      │
+│                                                  │
+│ Audit log append-only. Último registro = estado  │
+│ actual. Sincronizado con entries.approval_status │
 └──────────────────────────────────────────────────┘
 
 ┌──────────────────────────────────────────────────┐
@@ -287,7 +319,7 @@ def _connect():
 - `project-add` → INSERT con FK a client, rate y budget opcionales
 
 **Tabla `entries`** — Registro principal de tiempo:
-- `log` → INSERT manual. `started_at` = fecha + "T09:00:00", `ended_at` = NULL, `duration_minutes` = valor parseado. `user_id` y `external_id` opcionales en single-user, requeridos en multi-user.
+- `log` → INSERT manual. `started_at` = fecha + "T09:00:00", `ended_at` = NULL, `duration_minutes` = valor parseado. `user_id` y `external_id` opcionales en single-user, requeridos en multi-user. `approval_status` = `'pending'` si `approval_required` true, sino `'approved'`.
 - `stop` → INSERT desde timer (solo single-user). `started_at` y `ended_at` calculados del timer.
 - `edit` → UPDATE parcial (description, duration, category, tags, notes, rate, billable, client_id, project_id, external_id)
 - `delete` → DELETE con `--confirm`
@@ -314,6 +346,11 @@ def _connect():
 - `unassign` → DELETE
 
 **Tabla `settings`**:
+
+**Tabla `entry_approvals`** — Audit log de aprobaciones:
+- `approve` → INSERT (entry_id, approver_id, action='approved'). Update entries.approval_status.
+- `reject` → INSERT (entry_id, approver_id, action='rejected', reason). Update entries.approval_status.
+- `delete_entry` → CASCADE delete de registros asociados.
 - Seed en `init_db()` con INSERT OR IGNORE
 - `setting-set` → UPSERT
 
@@ -324,8 +361,8 @@ def _connect():
 
 #### Relaciones
 
-- `entries.project_id` → `projects.id` (SET NULL) — entry sobrevive sin project
-- `entries.client_id` → `clients.id` (SET NULL) — entry sobrevive sin client
+- `entries.project_id` → `projects.id` (NOT NULL) — entry siempre tiene project
+- `entries.client_id` → `clients.id` (NOT NULL) — entry siempre tiene client
 - `projects.client_id` → `clients.id` (SET NULL) — project sobrevive sin client
 - `user_roles.user_id` → `users.user_id` (CASCADE) — roles se borran con user
 - `assignments.user_id` → `users.user_id` (CASCADE) — asignaciones se borran con user
@@ -353,6 +390,10 @@ def _connect():
 | `get_entry_by_external_id()` | Lookup | Busca entries por referencia externa |
 | `list_entries(user_id, external_id)` | CRUD | Query builder con filtros multi-user |
 | `search_entries(query, user_id)` | Search | FTS5 + LIKE fallback con scope filter |
+| `record_approval(entry_id, approver_id, action, reason)` | Approval | Insert en entry_approvals + update entries.approval_status |
+| `get_pending_entries(approver_id, ...)` | Approval | Entries pending que approver puede aprobar (scoped por assignments) |
+| `get_approval_history(entry_id)` | Approval | Historial de aprobaciones/rechazos |
+| `get_rejected_entries(user_id)` | Approval | Entries rechazadas de un usuario |
 | `get_summary(user_id, team)` | Report | Agregaciones Python. team=True ignora user_id filter |
 | `get_stats(user_id, scope)` | Report | Agregaciones SQL con scope own/all |
 | `_resolve_rate()` | Rate cascade | entry > project > client > `get_setting('default_rate')` |
@@ -373,14 +414,19 @@ def _connect():
                                                                           │
   log ──→ entries + entries_fts ◄────────────────────────────────────────┘
               │
-              ├── show (lectura, incluye external_id)
-              ├── list (filtros: client, project, user, external_id, dates)
+              ├── show (lectura, incluye external_id + approval_status)
+              ├── list (filtros: client, project, user, external_id, dates + Status column)
               ├── search (FTS5: description, notes, tags, external_id)
-              ├── edit ──→ entries UPDATE + entries_fts re-sync
-              ├── delete ──→ entries DELETE + entries_fts DELETE
+              ├── edit ──→ entries UPDATE + entries_fts re-sync + reset approval_status to pending
+              ├── delete ──→ entries DELETE + entries_fts DELETE + entry_approvals CASCADE
               ├── summary (agregación Python, scope all/own)
               ├── stats (agregación SQL, scope all/own)
-              └── export (JSON/CSV, filtrado por permisos)
+              ├── export (JSON/CSV, filtrado por permisos)
+              ├── approve ──→ entry_approvals INSERT + entries.approval_status = 'approved'
+              ├── reject ──→ entry_approvals INSERT + entries.approval_status = 'rejected'
+              ├── pending (lista entries con approval_status='pending', scoped por assignments)
+              ├── rejections (lista entries propias con status='rejected')
+              └── approval-history (lista registros de entry_approvals)
 ```
 
 ---
@@ -419,17 +465,48 @@ Entry.rate (override manual)
 
 **Roles**:
 
-| Acción | Manager | Timekeeper | Collaborator |
-|--------|---------|------------|--------------|
-| `log` | ✅ any | ❌ | ✅ assigned only (requires client+project) |
-| `list`/`search` | ✅ all | ✅ all | ✅ own |
-| `edit`/`delete` | ✅ any | ❌ | ✅ own |
-| `summary --team` | ✅ | ✅ | ❌ |
-| `client-add`/`project-add` | ✅ | ❌ | ❌ |
-| User/role/assign management | ✅ | ❌ | ❌ |
-| Settings/categories | ✅ | ❌ | ❌ |
+| Acción | Manager | Timekeeper | Collaborator | Approver |
+|--------|---------|------------|--------------|----------|
+| `log` | ✅ any | ❌ | ✅ assigned only | ✅ assigned only |
+| `list`/`search` | ✅ all | ✅ all | ✅ own | ✅ all |
+| `edit`/`delete` | ✅ any | ❌ | ✅ own | ✅ own |
+| `summary --team` | ✅ | ✅ | ❌ | ✅ |
+| `client-add`/`project-add` | ✅ | ❌ | ❌ | ❌ |
+| User/role/assign management | ✅ | ❌ | ❌ | ❌ |
+| Settings/categories | ✅ | ❌ | ❌ | ❌ |
+| Approve/reject entries | ✅ any | ❌ | ❌ | ✅ assigned scope |
+| View approval queue | ✅ | ✅ | ❌ | ✅ |
+| View own rejections | ✅ | ✅ | ✅ | ✅ |
 
 **Bootstrap**: si `has_managers()` retorna False, `user-add` y `role-add` no requieren permisos. Primer usuario se auto-asigna manager.
+
+### Approval Workflow
+
+Controlado por setting `approval_required` (default: False). Cuando está habilitado:
+
+```
+                    ┌───────────┐
+                    │  pending  │ ← new entry, o edit de approved/rejected
+                    └───────────┘
+                     /          \
+              approve/          \reject
+                    /            \
+          ┌───────────┐    ┌───────────┐
+          │  approved │    │  rejected  │
+          └───────────┘    └───────────┘
+                ^               │
+                │               │ (colaborador edita)
+                └───────────────┘
+```
+
+**Reglas**:
+- `approval_required=False`: entries nuevas nacen `approved`. Comandos de approval avisan que workflow no está habilitado.
+- `approval_required=True`: entries nuevas nacen `pending`. Approvers/managers las aprueban o rechazan.
+- **Auto-aprobación**: Managers pueden aprobar sus propias entries. Approvers NO.
+- **Scope**: Approvers solo ven/approve entries de client/project al que están asignados (vía `assignments`). Managers tienen scope global.
+- **Edición**: Editar un entry `approved` o `rejected` resetea a `pending`.
+- **Audit**: Tabla `entry_approvals` es append-only. Cada aprobación/rechazo es un registro con timestamp, approver, y reason.
+- **Rechazo**: Collaborators ven sus entries rechazadas via `rejections` con el motivo.
 
 ### Assignment Wildcard
 
@@ -463,6 +540,7 @@ Tabla virtual FTS5 sobre `(description, notes, tags, external_id)`:
 get_setting('default_rate')     # → 85.0 (float, auto-cast)
 get_setting('currency_symbol')  # → '€' (string)
 get_setting('round_to_minutes') # → 15 (int, auto-cast)
+get_setting('approval_required') # → False (bool, auto-cast)
 ```
 
 Type casting automático vía `SETTING_TYPE_MAP`. Defaults en `SETTING_DEFAULTS` dict.

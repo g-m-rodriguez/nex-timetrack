@@ -2,10 +2,11 @@
 Nex Timetrack - Permission layer for multi-user mode.
 All checks are no-ops in single-user mode (when no users exist in DB).
 """
-from lib.storage import is_multiuser, get_user, get_roles, has_assignment
+from lib.storage import (is_multiuser, get_user, get_roles, has_assignment,
+                          get_setting, get_entry)
 
 
-ROLES = ("manager", "timekeeper", "collaborator")
+ROLES = ("manager", "timekeeper", "collaborator", "approver")
 
 
 class PermissionDenied(Exception):
@@ -54,7 +55,7 @@ def require_role(user_id, role):
 
 
 def check_log_entry(user_id, client_id=None, project_id=None):
-    """Check if user can log time. Validates assignment for collaborator.
+    """Check if user can log time. Validates assignment for collaborator/approver.
     In multi-user, requires client_id, project_id."""
     if not is_multiuser():
         return True
@@ -65,10 +66,10 @@ def check_log_entry(user_id, client_id=None, project_id=None):
         return True
     if 'timekeeper' in roles:
         raise PermissionDenied("Timekeepers cannot log time entries.")
-    if 'collaborator' in roles:
+    if 'collaborator' in roles or 'approver' in roles:
         if not client_id or not project_id:
             raise PermissionDenied(
-                "Collaborators must specify --client and --project when logging time."
+                "Must specify --client and --project when logging time."
             )
         if not has_assignment(user_id, client_id, project_id):
             raise PermissionDenied(
@@ -86,7 +87,7 @@ def check_view_entries(user_id):
     if user_id is None:
         return 'all'
     roles = get_roles(user_id)
-    if 'manager' in roles or 'timekeeper' in roles:
+    if 'manager' in roles or 'timekeeper' in roles or 'approver' in roles:
         return 'all'
     return 'own'
 
@@ -103,7 +104,7 @@ def check_modify_entry(user_id, entry_user_id):
         return True
     if 'timekeeper' in roles:
         raise PermissionDenied("Timekeepers cannot modify entries.")
-    if 'collaborator' in roles:
+    if 'collaborator' in roles or 'approver' in roles:
         if entry_user_id and entry_user_id != user_id:
             raise PermissionDenied("Can only modify own entries.")
         return True
@@ -126,11 +127,58 @@ def check_manage_settings(user_id):
 
 
 def check_view_users(user_id):
-    """Manager or timekeeper can view users. Collaborator cannot."""
+    """Manager, timekeeper, or approver can view users."""
     if not is_multiuser():
         return True
     user_id = require_user(user_id)
     roles = get_roles(user_id)
-    if 'manager' in roles or 'timekeeper' in roles:
+    if 'manager' in roles or 'timekeeper' in roles or 'approver' in roles:
         return True
     raise PermissionDenied("No tienes permisos para listar usuarios.")
+
+
+def check_approve_entry(approver_id, entry_id):
+    """Verify that approver_id can approve/reject the given entry."""
+    if not is_multiuser():
+        raise PermissionDenied("Approval workflow requires multi-user mode.")
+    if not get_setting('approval_required'):
+        raise PermissionDenied(
+            "Approval workflow is not enabled. Enable with: setting-set approval_required true"
+        )
+    approver_id = require_user(approver_id)
+    roles = get_roles(approver_id)
+
+    if 'manager' not in roles and 'approver' not in roles:
+        raise PermissionDenied(f"User {approver_id} requires 'approver' or 'manager' role.")
+
+    entry = get_entry(entry_id)
+    if not entry:
+        raise PermissionDenied(f"Entry {entry_id} not found.")
+
+    if entry['approval_status'] != 'pending':
+        raise PermissionDenied(f"Entry {entry_id} is already {entry['approval_status']}.")
+
+    # Managers can approve their own entries; approvers cannot
+    if 'manager' not in roles and entry.get('user_id') == approver_id:
+        raise PermissionDenied("Cannot approve your own entries.")
+
+    # Approvers must be assigned to the entry's client/project
+    if 'manager' not in roles:
+        client_id = entry.get('client_id')
+        project_id = entry.get('project_id')
+        if client_id and not has_assignment(approver_id, client_id, project_id):
+            raise PermissionDenied("Not assigned as approver for this client/project.")
+
+    return True
+
+
+def check_view_approvals(user_id):
+    """Check if user can view approval queues.
+    Returns 'all', 'own_rejections', or raises PermissionDenied."""
+    if not is_multiuser():
+        return 'all'
+    user_id = require_user(user_id)
+    roles = get_roles(user_id)
+    if 'manager' in roles or 'approver' in roles or 'timekeeper' in roles:
+        return 'all'
+    return 'own_rejections'

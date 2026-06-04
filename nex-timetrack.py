@@ -26,12 +26,14 @@ from lib.storage import (
     add_role, remove_role, get_roles,
     add_assignment, remove_assignment, get_assignments, has_assignment,
     get_entry_by_external_id,
+    record_approval, get_pending_entries, get_approval_history, get_rejected_entries,
 )
 from lib.permissions import (
     PermissionDenied,
     resolve_user, require_user, require_role,
     check_log_entry, check_view_entries, check_modify_entry,
     check_manage_clients, check_manage_users, check_manage_settings,
+    check_approve_entry, check_view_approvals,
 )
 
 FOOTER = "[Timetrack by Nex AI | nex-ai.be]"
@@ -273,6 +275,8 @@ def cmd_log(args):
     if args.external_id:
         print(f"  External ID: {args.external_id}")
     print(f"  Billable: {'yes' if billable else 'no'}")
+    if get_setting('approval_required'):
+        print(f"  Status: pending approval")
     print(FOOTER)
 
 
@@ -310,6 +314,17 @@ def cmd_show(args):
     if entry['notes']:
         print(f"Notes: {entry['notes']}")
 
+    if get_setting('approval_required'):
+        status = entry.get('approval_status', 'pending')
+        print(f"Approval: {status}")
+        if status == 'rejected':
+            history = get_approval_history(entry['id'])
+            if history:
+                latest = history[0]
+                approver = latest.get('approver_id', 'unknown')
+                reason = latest.get('reason', 'No reason given')
+                print(f"  Rejected by {approver}: {reason}")
+
     print(f"\n{FOOTER}")
 
 
@@ -345,8 +360,13 @@ def cmd_list(args):
         print(FOOTER)
         return
 
-    print(f"\n{'ID':<5} {'Date':<12} {'Duration':<10} {'Description':<30} {'Client':<16} {'Bill':<5}")
-    print("-" * 78)
+    show_status = get_setting('approval_required')
+    if show_status:
+        print(f"\n{'ID':<5} {'Date':<12} {'Duration':<10} {'Description':<30} {'Client':<16} {'Bill':<5} {'Status':<10}")
+        print("-" * 90)
+    else:
+        print(f"\n{'ID':<5} {'Date':<12} {'Duration':<10} {'Description':<30} {'Client':<16} {'Bill':<5}")
+        print("-" * 78)
 
     total_mins = 0
     for e in entries:
@@ -356,7 +376,11 @@ def cmd_list(args):
         dur = _fmt_duration(e['duration_minutes'])
         bill = "yes" if e['billable'] else "no"
         total_mins += e['duration_minutes'] or 0
-        print(f"{e['id']:<5} {date:<12} {dur:<10} {desc:<30} {client:<16} {bill:<5}")
+        if show_status:
+            status = e.get('approval_status', 'pending')[:9]
+            print(f"{e['id']:<5} {date:<12} {dur:<10} {desc:<30} {client:<16} {bill:<5} {status:<10}")
+        else:
+            print(f"{e['id']:<5} {date:<12} {dur:<10} {desc:<30} {client:<16} {bill:<5}")
 
     print(f"\nTotal: {len(entries)} entries | {_fmt_duration(total_mins)}")
     print(FOOTER)
@@ -383,6 +407,11 @@ def cmd_edit(args):
     if current_client and not is_client_active(current_client):
         print(f"Error: Client is deactivated. Cannot edit entries.")
         sys.exit(1)
+
+    # Warn if editing approved entry (will reset to pending)
+    if (entry.get('approval_status') in ('approved', 'rejected')
+            and get_setting('approval_required')):
+        print("  Warning: Editing will reset approval status to pending.")
 
     updates = {}
     if args.description:
@@ -729,6 +758,165 @@ def cmd_project_reactivate(args):
         print(f"Project reactivated. Time logging enabled.")
     else:
         print(f"Failed to reactivate project.")
+    print(FOOTER)
+
+
+# --- Approval commands ---
+
+def cmd_pending(args):
+    init_db()
+    user_id = _resolve_user_id(args)
+
+    try:
+        scope = check_view_approvals(user_id)
+    except PermissionDenied as e:
+        print(f"Error: {e}")
+        sys.exit(1)
+
+    client_id = _resolve_client(args.client) if args.client else None
+    project_id = _resolve_project(args.project) if args.project else None
+
+    if not get_setting('approval_required'):
+        print("Approval workflow is not enabled. Enable with: setting-set approval_required true")
+        print(FOOTER)
+        return
+
+    entries = get_pending_entries(
+        approver_id=user_id,
+        client_id=client_id,
+        project_id=project_id,
+        for_user=args.for_user,
+        date_from=args.date_from,
+        date_to=args.date_to,
+    )
+
+    if not entries:
+        print("No pending entries found.")
+        print(FOOTER)
+        return
+
+    total_mins = 0
+    for e in entries:
+        eid = e['id']
+        date = _fmt_date(e['started_at'])
+        dur = _fmt_duration(e['duration_minutes'])
+        desc = e['description'][:29]
+        client = (e.get('client_name') or '')[:15]
+        project = (e.get('project_name') or '')[:15]
+        owner = (e.get('user_id') or '')[:12]
+        total_mins += e['duration_minutes'] or 0
+        if args.user:
+            print(f"{eid:<5} {date:<12} {dur:<10} {desc:<30} {client:<16} {project:<16}")
+        else:
+            print(f"{eid:<5} {date:<12} {owner:<13} {dur:<10} {desc:<30} {client:<16}")
+
+    filter_desc = ""
+    if args.for_user:
+        filter_desc = f" for {args.for_user}"
+    elif args.project:
+        filter_desc = f" for project {args.project}"
+    print(f"\nTotal: {len(entries)} entries pending approval{filter_desc} | {_fmt_duration(total_mins)}")
+    print(FOOTER)
+
+
+def cmd_approve(args):
+    init_db()
+    approver_id = _resolve_user_id(args)
+
+    if not get_setting('approval_required'):
+        print("Approval workflow is not enabled. Enable with: setting-set approval_required true")
+        print(FOOTER)
+        return
+
+    approved = 0
+    for eid in args.ids:
+        try:
+            check_approve_entry(approver_id, eid)
+            record_approval(eid, approver_id, 'approved')
+            print(f"Entry #{eid} approved.")
+            approved += 1
+        except PermissionDenied as e:
+            print(f"Entry #{eid} skipped: {e}")
+
+    if approved:
+        print(f"\n{approved} entry(ies) approved.")
+    print(FOOTER)
+
+
+def cmd_reject(args):
+    init_db()
+    approver_id = _resolve_user_id(args)
+
+    if not get_setting('approval_required'):
+        print("Approval workflow is not enabled. Enable with: setting-set approval_required true")
+        print(FOOTER)
+        return
+
+    rejected = 0
+    for eid in args.ids:
+        try:
+            check_approve_entry(approver_id, eid)
+            record_approval(eid, approver_id, 'rejected', reason=args.reason)
+            print(f"Entry #{eid} rejected. Reason: {args.reason}")
+            rejected += 1
+        except PermissionDenied as e:
+            print(f"Entry #{eid} skipped: {e}")
+
+    if rejected:
+        print(f"\n{rejected} entry(ies) rejected.")
+    print(FOOTER)
+
+
+def cmd_rejections(args):
+    init_db()
+    user_id = _resolve_user_id(args)
+
+    entries = get_rejected_entries(user_id)
+    if not entries:
+        print("No rejected entries.")
+        print(FOOTER)
+        return
+
+    for e in entries:
+        eid = e['id']
+        date = _fmt_date(e['started_at'])
+        desc = e['description'][:35]
+        client = (e.get('client_name') or '')[:15]
+        # Get latest rejection reason
+        history = get_approval_history(eid)
+        reason = history[0].get('reason', 'No reason') if history else 'No reason'
+        approver = history[0].get('approver_id', 'unknown') if history else 'unknown'
+        print(f"{eid:<5} {date:<12} {desc:<36} {approver:<13} {reason}")
+
+    print(f"\nTotal: {len(entries)} rejected entry(ies)")
+    print(FOOTER)
+
+
+def cmd_approval_history(args):
+    init_db()
+
+    entry = get_entry(args.id)
+    if not entry:
+        print(f"Entry {args.id} not found.")
+        print(FOOTER)
+        return
+
+    print(f"Entry #{args.id}: {entry['description']}")
+    print(f"  Status: {entry.get('approval_status', 'pending')}")
+
+    history = get_approval_history(args.id)
+    if not history:
+        print("  No approval history.")
+    else:
+        for h in history:
+            action = h['action']
+            approver = h.get('approver_name') or h['approver_id']
+            timestamp = h.get('approved_at', '')
+            reason = h.get('reason', '')
+            line = f"  {timestamp}  {action:<10} by {approver}"
+            if reason:
+                line += f"  Reason: {reason}"
+            print(line)
     print(FOOTER)
 
 
@@ -1287,6 +1475,36 @@ def main():
     add_user_arg(p)
     p.set_defaults(func=cmd_project_reactivate)
 
+    # APPROVAL
+    p = subparsers.add_parser('pending', help='List entries pending approval')
+    p.add_argument('--for-user', help='Filter by user ID (entry owner)')
+    p.add_argument('--client', help='Filter by client')
+    p.add_argument('--project', help='Filter by project')
+    p.add_argument('--date-from', help='From date (YYYY-MM-DD)')
+    p.add_argument('--date-to', help='To date (YYYY-MM-DD)')
+    add_user_arg(p)
+    p.set_defaults(func=cmd_pending)
+
+    p = subparsers.add_parser('approve', help='Approve time entries')
+    p.add_argument('ids', nargs='+', type=int, help='Entry ID(s) to approve')
+    add_user_arg(p)
+    p.set_defaults(func=cmd_approve)
+
+    p = subparsers.add_parser('reject', help='Reject time entries')
+    p.add_argument('ids', nargs='+', type=int, help='Entry ID(s) to reject')
+    p.add_argument('--reason', required=True, help='Reason for rejection')
+    add_user_arg(p)
+    p.set_defaults(func=cmd_reject)
+
+    p = subparsers.add_parser('rejections', help='View your rejected entries')
+    add_user_arg(p)
+    p.set_defaults(func=cmd_rejections)
+
+    p = subparsers.add_parser('approval-history', help='View approval history for an entry')
+    p.add_argument('id', type=int, help='Entry ID')
+    add_user_arg(p)
+    p.set_defaults(func=cmd_approval_history)
+
     # SUMMARY
     p = subparsers.add_parser('summary', help='Billing summary')
     p.add_argument('--client', help='Filter by client')
@@ -1339,14 +1557,14 @@ def main():
     # ROLE ADD
     p = subparsers.add_parser('role-add', help='Assign a role to a user (manager only)')
     p.add_argument('user_id', help='User ID')
-    p.add_argument('role', choices=['manager', 'timekeeper', 'collaborator'], help='Role')
+    p.add_argument('role', choices=['manager', 'timekeeper', 'collaborator', 'approver'], help='Role')
     add_user_arg(p)
     p.set_defaults(func=cmd_role_add)
 
     # ROLE REMOVE
     p = subparsers.add_parser('role-remove', help='Remove a role from a user (manager only)')
     p.add_argument('user_id', help='User ID')
-    p.add_argument('role', choices=['manager', 'timekeeper', 'collaborator'], help='Role')
+    p.add_argument('role', choices=['manager', 'timekeeper', 'collaborator', 'approver'], help='Role')
     add_user_arg(p)
     p.set_defaults(func=cmd_role_remove)
 
