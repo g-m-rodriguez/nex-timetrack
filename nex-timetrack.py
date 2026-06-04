@@ -835,7 +835,7 @@ def cmd_approve(args):
     approved = 0
     for eid in args.ids:
         try:
-            check_approve_entry(approver_id, eid)
+            check_approve_entry(approver_id, eid, action='approved')
             record_approval(eid, approver_id, 'approved')
             print(f"Entry #{eid} approved.")
             approved += 1
@@ -859,9 +859,8 @@ def cmd_reject(args):
     rejected = 0
     for eid in args.ids:
         try:
-            check_approve_entry(approver_id, eid)
+            check_approve_entry(approver_id, eid, action='rejected')
             record_approval(eid, approver_id, 'rejected', reason=args.reason)
-            print(f"Entry #{eid} rejected. Reason: {args.reason}")
             rejected += 1
         except PermissionDenied as e:
             print(f"Entry #{eid} skipped: {e}")

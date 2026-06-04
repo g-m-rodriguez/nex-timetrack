@@ -137,8 +137,9 @@ def check_view_users(user_id):
     raise PermissionDenied("No tienes permisos para listar usuarios.")
 
 
-def check_approve_entry(approver_id, entry_id):
-    """Verify that approver_id can approve/reject the given entry."""
+def check_approve_entry(approver_id, entry_id, action=None):
+    """Verify that approver_id can approve/reject the given entry.
+    action: 'approved' or 'rejected'. If None, only pending entries allowed."""
     if not is_multiuser():
         raise PermissionDenied("Approval workflow requires multi-user mode.")
     if not get_setting('approval_required'):
@@ -155,7 +156,11 @@ def check_approve_entry(approver_id, entry_id):
     if not entry:
         raise PermissionDenied(f"Entry {entry_id} not found.")
 
-    if entry['approval_status'] != 'pending':
+    if entry['approval_status'] not in ('pending', 'approved'):
+        raise PermissionDenied(f"Entry {entry_id} is {entry['approval_status']}.")
+
+    # Only 'reject' can be applied to approved entries; 'approve' only on pending
+    if action == 'approve' and entry['approval_status'] != 'pending':
         raise PermissionDenied(f"Entry {entry_id} is already {entry['approval_status']}.")
 
     # Managers can approve their own entries; approvers cannot

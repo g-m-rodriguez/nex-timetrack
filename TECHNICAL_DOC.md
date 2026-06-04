@@ -493,7 +493,7 @@ Entry.rate (override manual)
 | `category-add`/`category-remove` | ✅ | ❌ | ❌ | ❌ | |
 | `pending` (view queue) | ✅ all | ✅ all | ❌ | ✅ assigned scope | Solo si `approval_required=true` |
 | `approve` | ✅ any (incl. own) | ❌ | ❌ | ✅ assigned scope (not own) | Solo si `approval_required=true`. Entry debe estar `pending`. |
-| `reject` | ✅ any (incl. own) | ❌ | ❌ | ✅ assigned scope (not own) | Solo si `approval_required=true`. Requiere `--reason`. Entry debe estar `pending`. |
+| `reject` | ✅ any (incl. own) | ❌ | ❌ | ✅ assigned scope (not own) | Solo si `approval_required=true`. Requiere `--reason`. Funciona en entries `pending` y `approved`. |
 | `rejections` (own) | ✅ | ✅ | ✅ | ✅ | Muestra entries propias rechazadas con motivo |
 | `approval-history` | ✅ | ✅ | ✅ | ✅ | |
 
@@ -509,7 +509,7 @@ Entry.rate (override manual)
 | `approval_required=false` | Entries nuevas nacen `approved`. Comandos approve/reject/pending avisan que workflow no está habilitado. |
 | `approval_required=true` | Entries nuevas nacen `pending`. Editar entry approved/rejected → resetea a pending. |
 | Entry status `pending` | Solo se puede approve/reject. No bloquea edit/delete. |
-| Entry status `approved` | Edit → **bloqueado** (error). Approve/reject → error "already approved". |
+| Entry status `approved` | Edit → **bloqueado** (error). Approve → error "already approved". Reject → **permitido** (pasa a rejected, collaborator puede editar y resubmit). |
 | Entry status `rejected` | Edit → resetea a `pending` + warning. Approve/reject → error "already rejected". |
 
 ### Approval Workflow
