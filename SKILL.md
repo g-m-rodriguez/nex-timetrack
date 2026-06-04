@@ -209,8 +209,12 @@ nex-timetrack assign mm-bob --client "Acme Corp" --project "Website" --user mm-a
 **Logging time with ticket reference:**
 > "Log 2 hours of development work on JIRA-1234 for Acme's website"
 ```bash
-nex-timetrack log "API integration" 2h --client "Acme Corp" --project "Website" --external-id "JIRA-1234" --category development --user $HERMES_SESSION_USER_ID
+nex-timetrack log "development work" 2h --client "Acme Corp" --project "Website" --external-id "JIRA-1234" --category development --user $HERMES_SESSION_USER_ID
 ```
+
+**Logging time without explicit description — agent asks first:**
+> "Log 2 hours for Acme website JIRA-456"
+Agent asks: "What did you work on?" → user responds → agent uses exact response as description.
 
 **Billing summary for team:**
 > "How many hours did the team bill this month?"
@@ -280,6 +284,15 @@ All other commands require `--user $HERMES_SESSION_USER_ID` in multi-user mode. 
 ### 4. Error messages
 - If a command fails with "Permission denied", report it as: "You don't have permission to do that." Do NOT include the user ID, role details, or the command that was run.
 - If a command fails with "User required", report: "You need to be registered as a user first. Ask a manager to add you."
+
+### 5. Never invent field values
+When logging time, the agent MUST use exact values provided by the user. If the user does not explicitly provide a value for any of the following fields, the agent MUST ask the user before proceeding:
+- **description** — what was done. Do NOT infer, summarize, or invent. Use the user's exact words or ask.
+- **external-id** — the ticket/task reference (JIRA, AzureDevOps, GitHub issue, etc.). Do NOT generate or guess one.
+- ❌ BAD: User says "log 2h on Acme website" → agent uses `log "API integration"` (invented)
+- ✅ GOOD: User says "log 2h on Acme website" → agent asks "What did you work on?" and "What's the ticket/task reference?"
+
+If the user explicitly declines to provide an external-id (e.g., "no ticket for this"), proceed without it. But never skip the question.
 
 ## Error Handling
 
