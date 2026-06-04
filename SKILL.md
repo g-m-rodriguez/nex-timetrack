@@ -267,7 +267,7 @@ When executing commands on behalf of a user, follow these rules strictly:
 
 ### 3. Pass credentials only when needed
 These commands are **public** (no `--user` required, no credentials passed):
-`clients`, `projects`, `categories`, `settings`, `user-list`
+`clients`, `projects`, `categories`, `settings`
 
 All other commands require `--user $HERMES_SESSION_USER_ID` in multi-user mode. Pass it silently via env var — never echo it.
 

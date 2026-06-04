@@ -123,3 +123,14 @@ def check_manage_users(user_id):
 def check_manage_settings(user_id):
     """Manager only — settings and categories."""
     return require_role(user_id, 'manager')
+
+
+def check_view_users(user_id):
+    """Manager or timekeeper can view users. Collaborator cannot."""
+    if not is_multiuser():
+        return True
+    user_id = require_user(user_id)
+    roles = get_roles(user_id)
+    if 'manager' in roles or 'timekeeper' in roles:
+        return True
+    raise PermissionDenied("No tienes permisos para listar usuarios.")

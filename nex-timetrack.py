@@ -710,6 +710,14 @@ def cmd_user_add(args):
 
 def cmd_user_list(args):
     init_db()
+    user_id = _resolve_user_id(args)
+
+    try:
+        from lib.permissions import check_view_users
+        check_view_users(user_id)
+    except PermissionDenied as e:
+        print(f"Error: {e}")
+        sys.exit(3)
 
     users = list_users()
     if not users:
@@ -1083,7 +1091,8 @@ def main():
     p.set_defaults(func=cmd_user_add)
 
     # USER LIST
-    p = subparsers.add_parser('user-list', help='List users and roles')
+    p = subparsers.add_parser('user-list', help='List users and roles (manager/timekeeper only)')
+    add_user_arg(p)
     p.set_defaults(func=cmd_user_list)
 
     # ROLE ADD
