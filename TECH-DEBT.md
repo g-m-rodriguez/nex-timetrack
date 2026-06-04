@@ -20,3 +20,4 @@ Registro de mejoras pendientes, ideas a implementar y bugs a corregir.
 | ID | Fecha | Descripción | Notas |
 |----|-------|-------------|-------|
 | TI-001 | 2026-06-03 | Skipped (reservado) | |
+| TD-003 | 2026-06-04 | **Budget de horas por proyecto con control de exceso**. Al crear proyecto: indicar si tiene budget y si es mensual o total. Manager/timekeeper: ver consumo reportado y remanente. Approver: ver budget consumido y restante antes/después de aprobar horas. Si aprobación excede budget (total o mensual), approver debe justificar motivo. Requiere: schema (projects: budget_type 'monthly'|'total'|NULL, budget_hours ya existe), storage functions para cálculo de consumo, modificación de `pending`/`approve` para mostrar budget y exigir razón si excede. | Alta | Pendiente |
