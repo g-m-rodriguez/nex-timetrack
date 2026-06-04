@@ -112,7 +112,8 @@ nex-timetrack log "Task" 2h --client "Acme" --project "Web" --external-id "JIRA-
 | Command | What it does |
 |---------|-------------|
 | `user-add` | Register a user |
-| `user-list` | List users with roles |
+| `user-list` | List users with roles (manager/timekeeper only) |
+| `user-deactivate` | Deactivate a user, requires --confirm (manager only) |
 | `role-add` | Assign role to user |
 | `role-remove` | Remove role from user |
 | `assign` | Assign user to client/project |

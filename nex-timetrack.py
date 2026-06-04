@@ -737,6 +737,33 @@ def cmd_user_list(args):
     print(FOOTER)
 
 
+def cmd_user_deactivate(args):
+    init_db()
+    user_id = _resolve_user_id(args)
+
+    try:
+        check_manage_users(user_id)
+    except PermissionDenied as e:
+        print(f"Error: {e}")
+        sys.exit(1)
+
+    target = get_user(args.user_id)
+    if not target:
+        print(f"User '{args.user_id}' not found.")
+        print(FOOTER)
+        return
+
+    if not args.confirm:
+        print(f"Deactivate user '{target['name']}' ({args.user_id})?")
+        print(f"Run again with --confirm to deactivate.")
+        print(FOOTER)
+        return
+
+    deactivate_user(args.user_id)
+    print(f"User '{target['name']}' ({args.user_id}) deactivated.")
+    print(FOOTER)
+
+
 def cmd_role_add(args):
     init_db()
 
@@ -1094,6 +1121,13 @@ def main():
     p = subparsers.add_parser('user-list', help='List users and roles (manager/timekeeper only)')
     add_user_arg(p)
     p.set_defaults(func=cmd_user_list)
+
+    # USER DEACTIVATE
+    p = subparsers.add_parser('user-deactivate', help='Deactivate a user (manager only)')
+    p.add_argument('user_id', help='User ID to deactivate')
+    p.add_argument('--confirm', action='store_true', help='Confirm deactivation')
+    add_user_arg(p)
+    p.set_defaults(func=cmd_user_deactivate)
 
     # ROLE ADD
     p = subparsers.add_parser('role-add', help='Assign a role to a user (manager only)')
