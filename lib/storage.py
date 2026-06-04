@@ -783,6 +783,28 @@ def list_projects(active_only=True):
         return [dict(row) for row in cursor.fetchall()]
 
 
+def deactivate_project(project_id):
+    with _connect() as conn:
+        cursor = conn.cursor()
+        cursor.execute("UPDATE projects SET active = 0 WHERE id = ?", (project_id,))
+        return cursor.rowcount > 0
+
+
+def reactivate_project(project_id):
+    with _connect() as conn:
+        cursor = conn.cursor()
+        cursor.execute("UPDATE projects SET active = 1 WHERE id = ?", (project_id,))
+        return cursor.rowcount > 0
+
+
+def is_project_active(project_id):
+    with _connect() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT active FROM projects WHERE id = ?", (project_id,))
+        row = cursor.fetchone()
+        return row is not None and row['active'] == 1
+
+
 # --- Rate resolution ---
 
 def _resolve_rate(conn, project_id=None, client_id=None):

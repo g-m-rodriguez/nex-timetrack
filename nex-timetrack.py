@@ -18,7 +18,8 @@ from lib.storage import (
     search_entries, save_client, get_client, find_client_by_name,
     list_clients, rename_client, deactivate_client, reactivate_client, is_client_active,
     save_project, get_project, find_project_by_name,
-    list_projects, get_summary, get_stats, export_entries,
+    list_projects, deactivate_project, reactivate_project, is_project_active,
+    get_summary, get_stats, export_entries,
     get_setting, set_setting, list_settings,
     get_categories, add_category, deactivate_category,
     is_multiuser, has_managers, save_user, get_user, list_users, deactivate_user,
@@ -228,6 +229,10 @@ def cmd_log(args):
 
     if client_id and not is_client_active(client_id):
         print(f"Error: Client is deactivated. Time logging not allowed.")
+        sys.exit(1)
+
+    if project_id and not is_project_active(project_id):
+        print(f"Error: Project is deactivated. Time logging not allowed.")
         sys.exit(1)
 
     try:
@@ -647,6 +652,76 @@ def cmd_projects(args):
         print(f"{p['id']:<5} {p['name'][:24]:<25} {client:<20} {rate:<12} {budget:<8}")
 
     print(f"\nTotal: {len(projects)} projects")
+    print(FOOTER)
+
+
+def cmd_project_deactivate(args):
+    init_db()
+    user_id = _resolve_user_id(args)
+
+    try:
+        check_manage_clients(user_id)
+    except PermissionDenied as e:
+        print(f"Error: {e}")
+        sys.exit(1)
+
+    project_id = _resolve_project(args.project)
+    if not project_id:
+        print(f"Project '{args.project}' not found.")
+        sys.exit(1)
+
+    project = get_project(project_id)
+    if not project:
+        print(f"Project not found.")
+        sys.exit(1)
+
+    if project.get('client_id') and not is_client_active(project['client_id']):
+        print(f"Error: Client is deactivated. Reactivate client first.")
+        sys.exit(1)
+
+    if not args.confirm:
+        print(f"Deactivate project '{project['name']}'?")
+        print(f"Run again with --confirm to deactivate.")
+        print(FOOTER)
+        return
+
+    success = deactivate_project(project_id)
+    if success:
+        print(f"Project deactivated. Time logging blocked.")
+    else:
+        print(f"Failed to deactivate project.")
+    print(FOOTER)
+
+
+def cmd_project_reactivate(args):
+    init_db()
+    user_id = _resolve_user_id(args)
+
+    try:
+        check_manage_clients(user_id)
+    except PermissionDenied as e:
+        print(f"Error: {e}")
+        sys.exit(1)
+
+    project_id = _resolve_project(args.project)
+    if not project_id:
+        print(f"Project '{args.project}' not found.")
+        sys.exit(1)
+
+    project = get_project(project_id)
+    if not project:
+        print(f"Project not found.")
+        sys.exit(1)
+
+    if project.get('client_id') and not is_client_active(project['client_id']):
+        print(f"Error: Client is deactivated. Reactivate client first.")
+        sys.exit(1)
+
+    success = reactivate_project(project_id)
+    if success:
+        print(f"Project reactivated. Time logging enabled.")
+    else:
+        print(f"Failed to reactivate project.")
     print(FOOTER)
 
 
@@ -1191,6 +1266,19 @@ def main():
     p = subparsers.add_parser('projects', help='List projects')
     p.add_argument('--all', action='store_true', help='Include inactive projects')
     p.set_defaults(func=cmd_projects)
+
+    # PROJECT DEACTIVATE
+    p = subparsers.add_parser('project-deactivate', help='Deactivate a project (manager only)')
+    p.add_argument('project', help='Project name')
+    p.add_argument('--confirm', action='store_true', help='Confirm deactivation')
+    add_user_arg(p)
+    p.set_defaults(func=cmd_project_deactivate)
+
+    # PROJECT REACTIVATE
+    p = subparsers.add_parser('project-reactivate', help='Reactivate a deactivated project (manager only)')
+    p.add_argument('project', help='Project name')
+    add_user_arg(p)
+    p.set_defaults(func=cmd_project_reactivate)
 
     # SUMMARY
     p = subparsers.add_parser('summary', help='Billing summary')
