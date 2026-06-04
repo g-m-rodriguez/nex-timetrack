@@ -75,6 +75,7 @@ def init_db():
                 rate REAL,
                 contact_email TEXT,
                 notes TEXT,
+                active INTEGER DEFAULT 1,
                 created_at TEXT DEFAULT (datetime('now'))
             );
 
@@ -172,6 +173,7 @@ def init_db():
             CREATE INDEX IF NOT EXISTS idx_entries_user ON entries(user_id);
             CREATE INDEX IF NOT EXISTS idx_entries_external_id ON entries(external_id);
             CREATE INDEX IF NOT EXISTS idx_projects_client ON projects(client_id);
+            CREATE INDEX IF NOT EXISTS idx_clients_active ON clients(active);
             CREATE INDEX IF NOT EXISTS idx_projects_active ON projects(active);
             CREATE INDEX IF NOT EXISTS idx_user_roles_user ON user_roles(user_id);
             CREATE INDEX IF NOT EXISTS idx_user_roles_role ON user_roles(role);
@@ -704,6 +706,21 @@ def rename_client(client_id, new_name):
         cursor = conn.cursor()
         cursor.execute("UPDATE clients SET name = ? WHERE id = ?", (new_name, client_id))
         return cursor.rowcount > 0
+
+
+def deactivate_client(client_id):
+    with _connect() as conn:
+        cursor = conn.cursor()
+        cursor.execute("UPDATE clients SET active = 0 WHERE id = ?", (client_id,))
+        return cursor.rowcount > 0
+
+
+def is_client_active(client_id):
+    with _connect() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT active FROM clients WHERE id = ?", (client_id,))
+        row = cursor.fetchone()
+        return row is not None and row['active'] == 1
 
 
 # --- Projects ---

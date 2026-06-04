@@ -16,7 +16,8 @@ from lib.storage import (
     init_db, start_timer, stop_timer, get_active_timer, cancel_timer,
     save_entry, get_entry, list_entries, update_entry, delete_entry,
     search_entries, save_client, get_client, find_client_by_name,
-    list_clients, rename_client, save_project, get_project, find_project_by_name,
+    list_clients, rename_client, deactivate_client, is_client_active,
+    save_project, get_project, find_project_by_name,
     list_projects, get_summary, get_stats, export_entries,
     get_setting, set_setting, list_settings,
     get_categories, add_category, deactivate_category,
@@ -225,6 +226,10 @@ def cmd_log(args):
     project_id = _resolve_project(args.project)
     billable = not args.non_billable
 
+    if client_id and not is_client_active(client_id):
+        print(f"Error: Client is deactivated. Time logging not allowed.")
+        sys.exit(1)
+
     try:
         check_log_entry(user_id, client_id, project_id)
     except PermissionDenied as e:
@@ -359,6 +364,12 @@ def cmd_edit(args):
         check_modify_entry(user_id, entry.get('user_id'))
     except PermissionDenied as e:
         print(f"Error: {e}")
+        sys.exit(1)
+
+    # Check client active status
+    current_client = entry.get('client_id')
+    if current_client and not is_client_active(current_client):
+        print(f"Error: Client is deactivated. Cannot edit entries.")
         sys.exit(1)
 
     updates = {}
@@ -528,6 +539,36 @@ def cmd_client_rename(args):
     print(FOOTER)
 
 
+def cmd_client_deactivate(args):
+    init_db()
+    user_id = _resolve_user_id(args)
+
+    try:
+        check_manage_clients(user_id)
+    except PermissionDenied as e:
+        print(f"Error: {e}")
+        sys.exit(1)
+
+    client_id = _resolve_client(args.client)
+    if not client_id:
+        print(f"Client '{args.client}' not found.")
+        sys.exit(1)
+
+    if not args.confirm:
+        client = get_client(client_id)
+        print(f"Deactivate client '{client['name']}'? All projects and time logging will be blocked.")
+        print(f"Run again with --confirm to deactivate.")
+        print(FOOTER)
+        return
+
+    success = deactivate_client(client_id)
+    if success:
+        print(f"Client deactivated. Projects and time logging blocked.")
+    else:
+        print(f"Failed to deactivate client.")
+    print(FOOTER)
+
+
 def cmd_project_add(args):
     init_db()
     user_id = _resolve_user_id(args)
@@ -539,6 +580,10 @@ def cmd_project_add(args):
         sys.exit(1)
 
     client_id = _resolve_client(args.client) if args.client else None
+
+    if client_id and not is_client_active(client_id):
+        print(f"Error: Client is deactivated. Cannot add projects.")
+        sys.exit(1)
 
     pid = save_project(
         name=args.name,
@@ -1094,6 +1139,13 @@ def main():
     p.add_argument('new_name', help='New client name')
     add_user_arg(p)
     p.set_defaults(func=cmd_client_rename)
+
+    # CLIENT DEACTIVATE
+    p = subparsers.add_parser('client-deactivate', help='Deactivate a client (manager only)')
+    p.add_argument('client', help='Client name')
+    p.add_argument('--confirm', action='store_true', help='Confirm deactivation')
+    add_user_arg(p)
+    p.set_defaults(func=cmd_client_deactivate)
 
     # PROJECT ADD
     p = subparsers.add_parser('project-add', help='Add a project (manager only)')
