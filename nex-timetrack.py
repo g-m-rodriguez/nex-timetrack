@@ -504,13 +504,14 @@ def cmd_clients(args):
         print(FOOTER)
         return
 
-    print(f"\n{'ID':<5} {'Name':<25} {'Rate':<12} {'Email':<30}")
-    print("-" * 72)
+    print(f"\n{'ID':<5} {'Name':<25} {'Active':<8} {'Rate':<12} {'Email':<30}")
+    print("-" * 80)
 
     for c in clients:
+        active = "yes" if c.get('active', 1) else "no"
         rate = _fmt_money(c['rate']) + "/h" if c['rate'] else "-"
         email = (c['contact_email'] or "")[:29]
-        print(f"{c['id']:<5} {c['name'][:24]:<25} {rate:<12} {email:<30}")
+        print(f"{c['id']:<5} {c['name'][:24]:<25} {active:<8} {rate:<12} {email:<30}")
 
     print(f"\nTotal: {len(clients)} clients")
     print(FOOTER)
