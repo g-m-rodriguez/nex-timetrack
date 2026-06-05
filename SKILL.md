@@ -251,8 +251,21 @@ nex-timetrack client-add "Acme Corp" --rate 90 --user $HERMES_SESSION_USER_ID
 **Updating settings:**
 > "Change the default rate to 95 euros"
 ```bash
-nex-timetrack setting-set default_rate 95 --user $HERMES_SESSION_USER_ID
+nex-timetrack setting-set default_rate 95 --user $SENDER_ID
 ```
+
+**Sending a notification to a user:**
+> "Notify Juan Perez that he has pending hours to approve"
+```bash
+nex-timetrack notify-mm "Juan Perez" "You have pending time entries to approve. Please review them at your earliest convenience." --user $SENDER_ID
+```
+
+> "Tell Bob Dev his time entry was rejected"
+```bash
+nex-timetrack notify-mm "Bob Dev" "Your time entry was rejected. Please review and resubmit." --user $SENDER_ID
+```
+
+**Note:** The agent uses the user's display name (as registered in nex-timetrack), never the Mattermost user ID. The resolution from name to user ID happens internally.
 
 ## Storage
 
