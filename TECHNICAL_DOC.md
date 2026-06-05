@@ -73,7 +73,7 @@ Arquitectura en 3 capas clásica para CLI:
 
 #### Comandos (`cmd_*`)
 
-34 subcomandos organizados en 8 dominios:
+35 subcomandos organizados en 8 dominios:
 
 **Timer** (deprecated en multi-user — se mantiene para backward compat single-user):
 
@@ -133,6 +133,7 @@ Arquitectura en 3 capas clásica para CLI:
 | `category-add` | `cmd_category_add` | Agrega categoría. `check_manage_settings()`. |
 | `category-remove` | `cmd_category_remove` | Desactiva categoría (soft delete). `check_manage_settings()`. |
 | `me` | `cmd_me` | Muestra nombre del usuario (`--user`). No requiere permisos especiales. |
+| `notify-mm` | `cmd_notify_mm` | Envía DM via Mattermost REST API. Manager/timekeeper only. Resuelve nombre→user_id. Requiere settings `mm_server_url` y `mm_bot_token`. |
 
 **Approval**:
 

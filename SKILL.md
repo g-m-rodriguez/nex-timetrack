@@ -136,6 +136,7 @@ nex-timetrack log "Task" 2h --client "Acme" --project "Web" --external-id "JIRA-
 | `category-add` | Add a category (manager only) |
 | `category-remove` | Deactivate a category (manager only) |
 | `me` | Show your name (requires `--user`) |
+| `notify-mm` | Send Mattermost DM to a user by name (manager/timekeeper only) |
 
 ### Reporting & Export
 

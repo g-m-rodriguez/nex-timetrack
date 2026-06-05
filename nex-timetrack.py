@@ -1351,6 +1351,95 @@ def cmd_me(args):
     print(FOOTER)
 
 
+def _mm_api(endpoint, token, server_url, data=None):
+    """Call Mattermost REST API. Returns (status_code, response_json)."""
+    import urllib.request
+    import urllib.error
+    url = f"{server_url.rstrip('/')}/api/v4/{endpoint.lstrip('/')}"
+    headers = {
+        'Authorization': f'Bearer {token}',
+        'Content-Type': 'application/json',
+    }
+    body = json.dumps(data).encode() if data else None
+    req = urllib.request.Request(url, data=body, headers=headers, method='POST' if body else 'GET')
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            return resp.status, json.loads(resp.read().decode())
+    except urllib.error.HTTPError as e:
+        return e.code, json.loads(e.read().decode())
+    except Exception as e:
+        return None, {'error': str(e)}
+
+
+def cmd_notify_mm(args):
+    init_db()
+    user_id = _resolve_user_id(args)
+
+    # Only manager or timekeeper can send notifications
+    from lib.permissions import PermissionDenied
+    try:
+        roles = get_roles(user_id)
+        if not roles.intersection({'manager', 'timekeeper'}):
+            raise PermissionDenied("Only managers and timekeepers can send notifications")
+    except PermissionDenied as e:
+        print(f"Error: {e}")
+        sys.exit(3)
+
+    # Resolve target user by name
+    target_name = args.user_name
+    users = list_users()
+    target = None
+    for u in users:
+        if u['name'].lower() == target_name.lower():
+            target = u
+            break
+    if not target:
+        print(f"User '{target_name}' not found.")
+        print(FOOTER)
+        return
+
+    # Get Mattermost settings
+    server_url = get_setting('mm_server_url')
+    bot_token = get_setting('mm_bot_token')
+    if not server_url or not bot_token:
+        print("Mattermost not configured. Set mm_server_url and mm_bot_token via setting-set.")
+        print(FOOTER)
+        return
+
+    # Create direct channel between bot and target user
+    target_mm_id = target['user_id']
+    status, resp = _mm_api('channels/direct', bot_token, server_url,
+                           data=[bot_token, target_mm_id])
+    if status != 200 and status != 201:
+        # Fallback: try using bot's own user_id from token
+        # Get bot's user_id from /users/me
+        me_status, me_resp = _mm_api('users/me', bot_token, server_url)
+        if me_status == 200:
+            bot_user_id = me_resp.get('id', '')
+            status, resp = _mm_api('channels/direct', bot_token, server_url,
+                                   data=[bot_user_id, target_mm_id])
+        if status != 200 and status != 201:
+            print(f"Error creating DM channel: {resp.get('message', resp.get('error', 'unknown'))}")
+            print(FOOTER)
+            return
+
+    channel_id = resp.get('id')
+    if not channel_id:
+        print("Error: could not get DM channel.")
+        print(FOOTER)
+        return
+
+    # Send message
+    message = args.message
+    status, resp = _mm_api('posts', bot_token, server_url,
+                           data={'channel_id': channel_id, 'message': message})
+    if status == 201:
+        print(f"Notification sent to {target['name']}.")
+    else:
+        print(f"Error sending message: {resp.get('message', resp.get('error', 'unknown'))}")
+    print(FOOTER)
+
+
 # --- Main ---
 
 def main():
@@ -1668,6 +1757,13 @@ def main():
     p = subparsers.add_parser('me', help='Show your name')
     add_user_arg(p)
     p.set_defaults(func=cmd_me)
+
+    # NOTIFY-MM
+    p = subparsers.add_parser('notify-mm', help='Send Mattermost DM to a user')
+    p.add_argument('user_name', help='Name of the user to notify')
+    p.add_argument('message', help='Message to send')
+    add_user_arg(p)
+    p.set_defaults(func=cmd_notify_mm)
 
     args = parser.parse_args()
 

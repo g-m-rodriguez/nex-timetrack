@@ -2172,3 +2172,53 @@ class TestMe:
         run("role-add", "mm-alice", "manager")
         r = run("me", "--user", "mm-nobody", expect_exit=0)
         assert "not found" in r.stdout.lower()
+
+
+# ============================================================
+# 28. NOTIFY-MM — TST-218 to TST-222
+# ============================================================
+
+class TestNotifyMm:
+
+    def test_tst_218_notify_permission_blocked(self, fresh_db):
+        """TST-218: Collaborator cannot send notifications."""
+        run("user-add", "mm-mgr", "--name", "Manager")
+        run("role-add", "mm-mgr", "manager")
+        run("user-add", "mm-col", "--name", "Collab", "--user", "mm-mgr")
+        run("role-add", "mm-col", "collaborator", "--user", "mm-mgr")
+        r = run("notify-mm", "Manager", "Hello", "--user", "mm-col", expect_exit=3)
+        assert "manager" in r.stdout.lower() or "timekeeper" in r.stdout.lower()
+
+    def test_tst_219_notify_user_not_found(self, fresh_db):
+        """TST-219: Notify unknown user returns not found."""
+        run("user-add", "mm-mgr", "--name", "Manager")
+        run("role-add", "mm-mgr", "manager")
+        r = run("notify-mm", "Nobody", "Hello", "--user", "mm-mgr", expect_exit=0)
+        assert "not found" in r.stdout.lower()
+
+    def test_tst_220_notify_no_mm_config(self, fresh_db):
+        """TST-220: Notify without Mattermost config shows helpful error."""
+        run("user-add", "mm-mgr", "--name", "Manager")
+        run("role-add", "mm-mgr", "manager")
+        run("user-add", "mm-col", "--name", "Collab", "--user", "mm-mgr")
+        r = run("notify-mm", "Collab", "Hello", "--user", "mm-mgr", expect_exit=0)
+        assert "not configured" in r.stdout.lower() or "mm_server_url" in r.stdout.lower()
+
+    def test_tst_221_notify_manager_allowed(self, fresh_db):
+        """TST-221: Manager can attempt notify (reaches config check, not permission denied)."""
+        run("user-add", "mm-mgr", "--name", "Manager")
+        run("role-add", "mm-mgr", "manager")
+        run("user-add", "mm-col", "--name", "Collab", "--user", "mm-mgr")
+        r = run("notify-mm", "Collab", "Hello", "--user", "mm-mgr", expect_exit=0)
+        # Should NOT get permission denied — should get config error instead
+        assert "permission" not in r.stdout.lower()
+
+    def test_tst_222_notify_timekeeper_allowed(self, fresh_db):
+        """TST-222: Timekeeper can attempt notify (reaches config check, not permission denied)."""
+        run("user-add", "mm-mgr", "--name", "Manager")
+        run("role-add", "mm-mgr", "manager")
+        run("user-add", "mm-tk", "--name", "Timekeeper", "--user", "mm-mgr")
+        run("role-add", "mm-tk", "timekeeper", "--user", "mm-mgr")
+        run("user-add", "mm-col", "--name", "Collab", "--user", "mm-mgr")
+        r = run("notify-mm", "Collab", "Hello", "--user", "mm-tk", expect_exit=0)
+        assert "permission" not in r.stdout.lower()

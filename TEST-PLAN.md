@@ -427,6 +427,18 @@ Todos los casos de uso válidos e inválidos, codificados TST-XXX para automatiz
 
 ---
 
+## 28. Notify-MM
+
+| ID | Tipo | Descripción | Qué verifica |
+|----|------|-------------|--------------|
+| TST-218 | ❌ | collaborator blocked | Permission denied exit code 3 |
+| TST-219 | ❌ | user not found | Retorna "not found" para nombre inexistente |
+| TST-220 | ✅ | no MM config | Muestra error de configuración |
+| TST-221 | ✅ | manager allowed | Manager alcanza config check, no permission denied |
+| TST-222 | ✅ | timekeeper allowed | Timekeeper alcanza config check, no permission denied |
+
+---
+
 ## Resumen
 
 | Dominio | Casos | Válidos | Inválidos |
@@ -459,4 +471,5 @@ Todos los casos de uso válidos e inválidos, codificados TST-XXX para automatiz
 | Duration parsing | 5 | 5 | 0 |
 | Audit Log | 24 | 24 | 0 |
 | Me command | 3 | 1 | 2 |
-| **Total** | **221** | **152** | **69** |
+| Notify-MM | 5 | 3 | 2 |
+| **Total** | **226** | **155** | **71** |
