@@ -386,6 +386,37 @@ Todos los casos de uso válidos e inválidos, codificados TST-XXX para automatiz
 
 ---
 
+## 26. Audit Log
+
+| ID | Tipo | Descripción | Qué verifica |
+|----|------|-------------|--------------|
+| TST-191 | ✅ | user-add (create) | action='create', entity_type='user', after_json con name |
+| TST-192 | ✅ | role-add (create) | action='create', entity_type='role', entity_id='user_id:role' |
+| TST-193 | ✅ | role-remove (delete) | action='delete', entity_type='role', before_json |
+| TST-194 | ✅ | client-add (create) | action='create', entity_type='client', after_json con name y rate |
+| TST-195 | ✅ | client-rename (update) | action='update', before_json.name≠after_json.name |
+| TST-196 | ✅ | client-deactivate (update) | action='update', before_json.active=1, after_json.active=0 |
+| TST-197 | ✅ | project-add (create) | action='create', entity_type='project', after_json con datos |
+| TST-198 | ✅ | assign/unassign (create/delete) | assign='create', unassign='delete' con before_json |
+| TST-199 | ✅ | log entry (create) | action='create', entity_type='entry', after_json con description |
+| TST-200 | ✅ | edit entry (update) | action='update', before_json con valor original, after_json con nuevo |
+| TST-201 | ✅ | delete entry (delete) | action='delete', before_json con datos, after_json NULL |
+| TST-202 | ✅ | approve (update) | action='update', metadata con approval_action='approved' |
+| TST-203 | ✅ | reject (update) | action='update', metadata con approval_action='rejected' y reason |
+| TST-204 | ✅ | setting-set nuevo (create) | action='create', before_json NULL |
+| TST-205 | ✅ | setting-set existente (update) | action='update', before_json con valor viejo, after_json con nuevo |
+| TST-206 | ✅ | category-add (create) | action='create', entity_type='category' |
+| TST-207 | ✅ | category-remove (update) | action='update', before_json.active=1, after_json.active=0 |
+| TST-208 | ✅ | user-deactivate (update) | action='update', before_json.active=1, after_json.active=0 |
+| TST-209 | ✅ | actor_id correcto | Cada audit entry tiene actor_id = manager que ejecutó |
+| TST-210 | ✅ | actor_id NULL en bootstrap | Primer user-add genera audit con actor_id NULL |
+| TST-211 | ✅ | Read-only no generan audit | show, list, clients, projects, settings, categories → 0 audit entries |
+| TST-212 | ✅ | Timestamp populated | Todas las entries tienen timestamp no-NULL |
+| TST-213 | ✅ | client-reactivate (update) | action='update', before_json.active=0, after_json.active=1 |
+| TST-214 | ✅ | project-deactivate/reactivate | deactivate active=0, reactivate active=1 |
+
+---
+
 ## Resumen
 
 | Dominio | Casos | Válidos | Inválidos |
@@ -416,4 +447,5 @@ Todos los casos de uso válidos e inválidos, codificados TST-XXX para automatiz
 | Single-user | 3 | 3 | 0 |
 | Timer deprecation | 4 | 4 | 0 |
 | Duration parsing | 5 | 5 | 0 |
-| **Total** | **194** | **127** | **67** |
+| Audit Log | 24 | 24 | 0 |
+| **Total** | **218** | **151** | **67** |

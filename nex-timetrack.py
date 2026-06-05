@@ -250,7 +250,7 @@ def cmd_log(args):
         print(f"Error: {e}")
         sys.exit(1)
 
-    entry_id = save_entry(
+    entry_id = save_entry(actor_id=user_id,
         description=args.description,
         duration_minutes=duration,
         project_id=project_id,
@@ -454,7 +454,7 @@ def cmd_edit(args):
         print("No updates specified.")
         return
 
-    success = update_entry(args.id, **updates)
+    success = update_entry(args.id, actor_id=user_id, **updates)
     if success:
         print(f"Entry #{args.id} updated.")
         for k, v in updates.items():
@@ -486,7 +486,7 @@ def cmd_delete(args):
         print(FOOTER)
         return
 
-    delete_entry(args.id)
+    delete_entry(args.id, actor_id=user_id)
     print(f"Entry #{args.id} deleted.")
     print(FOOTER)
 
@@ -534,6 +534,7 @@ def cmd_client_add(args):
         rate=args.rate,
         contact_email=args.email,
         notes=args.notes,
+        actor_id=user_id,
     )
 
     print(f"Client added (ID: {cid})")
@@ -582,7 +583,7 @@ def cmd_client_rename(args):
         print(f"Client '{args.client}' not found.")
         sys.exit(1)
 
-    success = rename_client(client_id, args.new_name)
+    success = rename_client(client_id, args.new_name, actor_id=user_id)
     if success:
         print(f"Client renamed: {args.client} → {args.new_name}")
     else:
@@ -612,7 +613,7 @@ def cmd_client_deactivate(args):
         print(FOOTER)
         return
 
-    success = deactivate_client(client_id)
+    success = deactivate_client(client_id, actor_id=user_id)
     if success:
         print(f"Client deactivated. Projects and time logging blocked.")
     else:
@@ -635,7 +636,7 @@ def cmd_client_reactivate(args):
         print(f"Client '{args.client}' not found.")
         sys.exit(1)
 
-    success = reactivate_client(client_id)
+    success = reactivate_client(client_id, actor_id=user_id)
     if success:
         print(f"Client reactivated. Projects and time logging enabled.")
     else:
@@ -665,6 +666,7 @@ def cmd_project_add(args):
         rate=args.rate,
         budget_hours=args.budget,
         notes=args.notes,
+        actor_id=user_id,
     )
 
     print(f"Project added (ID: {pid})")
@@ -730,7 +732,7 @@ def cmd_project_deactivate(args):
         print(FOOTER)
         return
 
-    success = deactivate_project(project_id)
+    success = deactivate_project(project_id, actor_id=user_id)
     if success:
         print(f"Project deactivated. Time logging blocked.")
     else:
@@ -762,7 +764,7 @@ def cmd_project_reactivate(args):
         print(f"Error: Client is deactivated. Reactivate client first.")
         sys.exit(1)
 
-    success = reactivate_project(project_id)
+    success = reactivate_project(project_id, actor_id=user_id)
     if success:
         print(f"Project reactivated. Time logging enabled.")
     else:
@@ -843,7 +845,7 @@ def cmd_approve(args):
     for eid in args.ids:
         try:
             check_approve_entry(approver_id, eid, action='approved')
-            record_approval(eid, approver_id, 'approved')
+            record_approval(eid, approver_id, 'approved', actor_id=approver_id)
             print(f"Entry #{eid} approved.")
             approved += 1
         except PermissionDenied as e:
@@ -867,7 +869,7 @@ def cmd_reject(args):
     for eid in args.ids:
         try:
             check_approve_entry(approver_id, eid, action='rejected')
-            record_approval(eid, approver_id, 'rejected', reason=args.reason)
+            record_approval(eid, approver_id, 'rejected', reason=args.reason, actor_id=approver_id)
             rejected += 1
         except PermissionDenied as e:
             print(f"Entry #{eid} skipped: {e}")
@@ -1071,15 +1073,16 @@ def cmd_user_add(args):
     init_db()
 
     # Bootstrap: if no managers exist, anyone can add users
+    actor_id = None
     if has_managers():
-        user_id = _resolve_user_id(args)
+        actor_id = _resolve_user_id(args)
         try:
-            check_manage_users(user_id)
+            check_manage_users(actor_id)
         except PermissionDenied as e:
             print(f"Error: {e}")
             sys.exit(1)
 
-    save_user(args.user_id, args.name)
+    save_user(args.user_id, args.name, actor_id=actor_id)
     print(f"User added: {args.name}")
     print(FOOTER)
 
@@ -1136,7 +1139,7 @@ def cmd_user_deactivate(args):
         print(FOOTER)
         return
 
-    deactivate_user(args.user_id)
+    deactivate_user(args.user_id, actor_id=user_id)
     print(f"User '{target['name']}' deactivated.")
     print(FOOTER)
 
@@ -1145,15 +1148,16 @@ def cmd_role_add(args):
     init_db()
 
     # Bootstrap: allow self-assigning manager role if no managers exist
+    actor_id = None
     if has_managers():
-        user_id = _resolve_user_id(args)
+        actor_id = _resolve_user_id(args)
         try:
-            check_manage_users(user_id)
+            check_manage_users(actor_id)
         except PermissionDenied as e:
             print(f"Error: {e}")
             sys.exit(1)
 
-    add_role(args.user_id, args.role)
+    add_role(args.user_id, args.role, actor_id=actor_id)
     target = get_user(args.user_id)
     target_name = target['name'] if target else args.user_id
     print(f"Role '{args.role}' added to {target_name}")
@@ -1170,7 +1174,7 @@ def cmd_role_remove(args):
         print(f"Error: {e}")
         sys.exit(1)
 
-    remove_role(args.user_id, args.role)
+    remove_role(args.user_id, args.role, actor_id=user_id)
     target = get_user(args.user_id)
     target_name = target['name'] if target else args.user_id
     print(f"Role '{args.role}' removed from {target_name}")
@@ -1193,7 +1197,7 @@ def cmd_assign(args):
         sys.exit(1)
     project_id = _resolve_project(args.project) if args.project else None
 
-    add_assignment(args.user_id, client_id, project_id)
+    add_assignment(args.user_id, client_id, project_id, actor_id=user_id)
     target = get_user(args.user_id)
     target_name = target['name'] if target else args.user_id
     print(f"Assigned {target_name} to {args.client}", end="")
@@ -1216,7 +1220,7 @@ def cmd_unassign(args):
     client_id = _resolve_client(args.client)
     project_id = _resolve_project(args.project) if args.project else None
 
-    remove_assignment(args.user_id, client_id, project_id)
+    remove_assignment(args.user_id, client_id, project_id, actor_id=user_id)
     target = get_user(args.user_id)
     target_name = target['name'] if target else args.user_id
     print(f"Unassigned {target_name} from {args.client}", end="")
@@ -1272,7 +1276,7 @@ def cmd_setting_set(args):
         print(f"Error: {e}")
         sys.exit(1)
 
-    set_setting(args.key, args.value)
+    set_setting(args.key, args.value, actor_id=user_id)
     print(f"Setting '{args.key}' updated to '{args.value}'")
     print(FOOTER)
 
@@ -1300,7 +1304,7 @@ def cmd_category_add(args):
         print(f"Error: {e}")
         sys.exit(1)
 
-    add_category(args.name)
+    add_category(args.name, actor_id=user_id)
     print(f"Category '{args.name}' added.")
     print(FOOTER)
 
@@ -1315,7 +1319,7 @@ def cmd_category_remove(args):
         print(f"Error: {e}")
         sys.exit(1)
 
-    deactivate_category(args.name)
+    deactivate_category(args.name, actor_id=user_id)
     print(f"Category '{args.name}' deactivated.")
     print(FOOTER)
 

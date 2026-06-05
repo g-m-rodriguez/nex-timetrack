@@ -763,3 +763,21 @@ Puntos naturales para extensión:
 - **API/HTTP wrapper**: storage.py es independiente del CLI — se puede exponer via Flask/FastAPI
 - **Notificaciones**: hook post-entry para enviar a Mattermost/Slack
 - **Budget tracking**: alertas cuando project se acerca al budget_hours
+
+## Deuda Técnica
+
+### TD-004: Audit Log — Trazabilidad completa de mutaciones
+
+**Prioridad:** Alta | **Estado:** ✅ Implementado | **Plan:** [PLAN-TD004.md](PLAN-TD004.md)
+
+**Problema:** Un agente de IA usó el `user_id` visible en outputs para impersonar un manager. No hay trazabilidad de quién hizo qué ni cuándo. Las 24 operaciones que mutan datos (entries, users, clients, projects, roles, assignments, settings, categories) no generan registro histórico.
+
+**Solución:** Tabla `audit_log` con full diff (before/after JSON) para toda mutación. Implementación en `lib/storage.py` (misma transaction que la mutación = atomicidad). Sin comando CLI — solo queryable via DB directa o futuro portal web.
+
+**Alcance:**
+- Schema: `audit_log` table con `action`, `actor_id`, `entity_type`, `entity_id`, `before_json`, `after_json`, `metadata`
+- 24 funciones mutantes en storage.py reciben `actor_id=None`
+- `_audit()` helper privado inserta en misma transaction
+- 24 test cases (TST-191 a TST-214)
+
+**Archivos:** `lib/storage.py`, `nex-timetrack.py`, `test_nex_timetrack.py`, `TEST-PLAN.md`

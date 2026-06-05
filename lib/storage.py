@@ -242,6 +242,36 @@ def init_db():
                 (cat,)
             )
 
+        # Migration: audit_log table
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS audit_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp TEXT NOT NULL DEFAULT (datetime('now')),
+                action TEXT NOT NULL,
+                actor_id TEXT,
+                entity_type TEXT NOT NULL,
+                entity_id TEXT NOT NULL,
+                before_json TEXT,
+                after_json TEXT,
+                metadata TEXT
+            )
+        """)
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_audit_timestamp ON audit_log(timestamp)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_audit_entity ON audit_log(entity_type, entity_id)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_audit_actor ON audit_log(actor_id)")
+
+
+# --- Audit helper ---
+
+def _audit(conn, action, entity_type, entity_id, actor_id=None, before=None, after=None, metadata=None):
+    conn.execute("""
+        INSERT INTO audit_log (action, actor_id, entity_type, entity_id, before_json, after_json, metadata)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+    """, (action, actor_id, entity_type, str(entity_id),
+          json.dumps(before, default=str) if before else None,
+          json.dumps(after, default=str) if after else None,
+          json.dumps(metadata, default=str) if metadata else None))
+
 
 # --- Settings ---
 
@@ -262,12 +292,19 @@ def get_setting(key, default=None):
     return SETTING_DEFAULTS.get(key)
 
 
-def set_setting(key, value):
+def set_setting(key, value, actor_id=None):
     with _connect() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM settings WHERE key = ?", (key,))
+        before_row = cursor.fetchone()
+        before = dict(before_row) if before_row else None
         conn.execute("""
             INSERT INTO settings (key, value, updated_at) VALUES (?, ?, datetime('now'))
             ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = datetime('now')
         """, (key, str(value)))
+        after = {'key': key, 'value': str(value)}
+        _audit(conn, 'update' if before else 'create', 'setting', key,
+               actor_id=actor_id, before=before, after=after)
 
 
 def list_settings():
@@ -298,14 +335,28 @@ def get_categories(active_only=True):
         return [r['name'] for r in cursor.fetchall()]
 
 
-def add_category(name):
+def add_category(name, actor_id=None):
     with _connect() as conn:
+        cursor = conn.cursor()
         conn.execute("INSERT INTO categories (name) VALUES (?)", (name,))
+        row_id = cursor.lastrowid
+        _audit(conn, 'create', 'category', row_id, actor_id=actor_id,
+               after={'id': row_id, 'name': name, 'active': 1})
 
 
-def deactivate_category(name):
+def deactivate_category(name, actor_id=None):
     with _connect() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM categories WHERE name = ?", (name,))
+        before_row = cursor.fetchone()
+        before = dict(before_row) if before_row else None
         conn.execute("UPDATE categories SET active = 0 WHERE name = ?", (name,))
+        after = dict(before) if before else None
+        if after:
+            after['active'] = 0
+        entity_id = before['id'] if before else name
+        _audit(conn, 'update', 'category', entity_id, actor_id=actor_id,
+               before=before, after=after)
 
 
 # --- Multi-user helpers ---
@@ -319,12 +370,21 @@ def is_multiuser():
 
 # --- Users CRUD ---
 
-def save_user(user_id, name):
+def save_user(user_id, name, actor_id=None):
     with _connect() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM users WHERE user_id = ?", (user_id,))
+        before_row = cursor.fetchone()
+        before = dict(before_row) if before_row else None
         conn.execute("""
             INSERT INTO users (user_id, name) VALUES (?, ?)
             ON CONFLICT(user_id) DO UPDATE SET name = excluded.name, active = 1
         """, (user_id, name))
+        cursor.execute("SELECT * FROM users WHERE user_id = ?", (user_id,))
+        after_row = cursor.fetchone()
+        after = dict(after_row) if after_row else None
+        _audit(conn, 'update' if before else 'create', 'user', user_id,
+               actor_id=actor_id, before=before, after=after)
 
 
 def get_user(user_id):
@@ -342,25 +402,40 @@ def list_users():
         return [dict(r) for r in cursor.fetchall()]
 
 
-def deactivate_user(user_id):
+def deactivate_user(user_id, actor_id=None):
     with _connect() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM users WHERE user_id = ?", (user_id,))
+        before_row = cursor.fetchone()
+        before = dict(before_row) if before_row else None
         conn.execute("UPDATE users SET active = 0 WHERE user_id = ?", (user_id,))
+        after = dict(before) if before else None
+        if after:
+            after['active'] = 0
+        _audit(conn, 'update', 'user', user_id, actor_id=actor_id,
+               before=before, after=after)
 
 
 # --- Roles ---
 
-def add_role(user_id, role):
+def add_role(user_id, role, actor_id=None):
     with _connect() as conn:
         conn.execute("""
             INSERT OR IGNORE INTO user_roles (user_id, role) VALUES (?, ?)
         """, (user_id, role))
+        _audit(conn, 'create', 'role', f"{user_id}:{role}", actor_id=actor_id,
+               after={'user_id': user_id, 'role': role},
+               metadata={'role': role})
 
 
-def remove_role(user_id, role):
+def remove_role(user_id, role, actor_id=None):
     with _connect() as conn:
+        before = {'user_id': user_id, 'role': role}
         conn.execute("""
             DELETE FROM user_roles WHERE user_id = ? AND role = ?
         """, (user_id, role))
+        _audit(conn, 'delete', 'role', f"{user_id}:{role}", actor_id=actor_id,
+               before=before, metadata={'role': role})
 
 
 def get_roles(user_id):
@@ -372,16 +447,34 @@ def get_roles(user_id):
 
 # --- Assignments ---
 
-def add_assignment(user_id, client_id, project_id=None):
+def add_assignment(user_id, client_id, project_id=None, actor_id=None):
     with _connect() as conn:
+        cursor = conn.cursor()
         conn.execute("""
             INSERT OR IGNORE INTO assignments (user_id, client_id, project_id)
             VALUES (?, ?, ?)
         """, (user_id, client_id, project_id))
+        row_id = cursor.lastrowid
+        _audit(conn, 'create', 'assignment', row_id, actor_id=actor_id,
+               after={'user_id': user_id, 'client_id': client_id, 'project_id': project_id},
+               metadata={'client_id': client_id, 'project_id': project_id})
 
 
-def remove_assignment(user_id, client_id, project_id=None):
+def remove_assignment(user_id, client_id, project_id=None, actor_id=None):
     with _connect() as conn:
+        cursor = conn.cursor()
+        if project_id:
+            cursor.execute("""
+                SELECT * FROM assignments
+                WHERE user_id = ? AND client_id = ? AND project_id = ?
+            """, (user_id, client_id, project_id))
+        else:
+            cursor.execute("""
+                SELECT * FROM assignments
+                WHERE user_id = ? AND client_id = ? AND project_id IS NULL
+            """, (user_id, client_id))
+        before_row = cursor.fetchone()
+        before = dict(before_row) if before_row else None
         if project_id:
             conn.execute("""
                 DELETE FROM assignments
@@ -392,6 +485,9 @@ def remove_assignment(user_id, client_id, project_id=None):
                 DELETE FROM assignments
                 WHERE user_id = ? AND client_id = ? AND project_id IS NULL
             """, (user_id, client_id))
+        entity_id = before['id'] if before else 'unknown'
+        _audit(conn, 'delete', 'assignment', entity_id, actor_id=actor_id,
+               before=before, metadata={'client_id': client_id, 'project_id': project_id})
 
 
 def get_assignments(user_id=None):
@@ -460,7 +556,7 @@ def _sync_fts_from_row(conn, row_id):
 # --- Timer (deprecated in multi-user) ---
 
 def start_timer(description, project_id=None, client_id=None, category="other",
-                billable=True, tags=None):
+                billable=True, tags=None, actor_id=None):
     with _connect() as conn:
         cursor = conn.cursor()
         cursor.execute("SELECT * FROM active_timer WHERE id = 1")
@@ -475,10 +571,12 @@ def start_timer(description, project_id=None, client_id=None, category="other",
             VALUES (1, ?, ?, ?, ?, ?, ?, ?)
         """, (description, project_id, client_id, category, 1 if billable else 0,
               tags, now))
+        _audit(conn, 'create', 'timer', 1, actor_id=actor_id,
+               after={'id': 1, 'description': description, 'started_at': now})
         return now, None
 
 
-def stop_timer(notes=None):
+def stop_timer(notes=None, actor_id=None):
     with _connect() as conn:
         cursor = conn.cursor()
         cursor.execute("SELECT * FROM active_timer WHERE id = 1")
@@ -504,6 +602,11 @@ def stop_timer(notes=None):
 
         entry_id = cursor.lastrowid
         _sync_fts(conn, entry_id, timer['description'], notes, timer['tags'])
+        # Audit: create entry + delete timer
+        _audit(conn, 'create', 'entry', entry_id, actor_id=actor_id,
+               after={'id': entry_id, 'description': timer['description'],
+                      'duration_minutes': round(duration, 1)})
+        _audit(conn, 'delete', 'timer', 1, actor_id=actor_id, before=timer)
         cursor.execute("DELETE FROM active_timer WHERE id = 1")
 
         return {
@@ -529,7 +632,7 @@ def get_active_timer():
         return timer
 
 
-def cancel_timer():
+def cancel_timer(actor_id=None):
     with _connect() as conn:
         cursor = conn.cursor()
         cursor.execute("SELECT * FROM active_timer WHERE id = 1")
@@ -537,6 +640,7 @@ def cancel_timer():
         if not timer:
             return None
         timer = dict(timer)
+        _audit(conn, 'delete', 'timer', 1, actor_id=actor_id, before=timer)
         cursor.execute("DELETE FROM active_timer WHERE id = 1")
         return timer
 
@@ -545,7 +649,8 @@ def cancel_timer():
 
 def save_entry(description, duration_minutes, project_id=None, client_id=None,
                category="other", billable=True, tags=None, notes=None,
-               entry_date=None, rate=None, user_id=None, external_id=None):
+               entry_date=None, rate=None, user_id=None, external_id=None,
+               actor_id=None):
     if not client_id:
         raise ValueError("client_id is required")
     if not project_id:
@@ -571,6 +676,10 @@ def save_entry(description, duration_minutes, project_id=None, client_id=None,
               user_id, external_id, approval_status))
         row_id = cursor.lastrowid
         _sync_fts(conn, row_id, description, notes, tags, external_id)
+        _audit(conn, 'create', 'entry', row_id, actor_id=actor_id,
+               after={'id': row_id, 'description': description,
+                      'duration_minutes': duration_minutes, 'user_id': user_id,
+                      'external_id': external_id, 'approval_status': approval_status})
         return row_id
 
 
@@ -648,7 +757,7 @@ def list_entries(project_id=None, client_id=None, category=None,
         return [dict(row) for row in cursor.fetchall()]
 
 
-def update_entry(entry_id, **kwargs):
+def update_entry(entry_id, actor_id=None, **kwargs):
     allowed = {
         'description', 'category', 'duration_minutes', 'billable',
         'rate', 'tags', 'notes', 'project_id', 'client_id',
@@ -676,18 +785,30 @@ def update_entry(entry_id, **kwargs):
 
     with _connect() as conn:
         cursor = conn.cursor()
+        cursor.execute("SELECT * FROM entries WHERE id = ?", (entry_id,))
+        before_row = cursor.fetchone()
+        before = dict(before_row) if before_row else None
         cursor.execute(f"UPDATE entries SET {set_clause} WHERE id = ?", values)
         if cursor.rowcount > 0:
             _sync_fts_from_row(conn, entry_id)
+            cursor.execute("SELECT * FROM entries WHERE id = ?", (entry_id,))
+            after_row = cursor.fetchone()
+            after = dict(after_row) if after_row else None
+            _audit(conn, 'update', 'entry', entry_id, actor_id=actor_id,
+                   before=before, after=after)
             return True
         return False
 
 
-def delete_entry(entry_id):
+def delete_entry(entry_id, actor_id=None):
     with _connect() as conn:
         cursor = conn.cursor()
+        cursor.execute("SELECT * FROM entries WHERE id = ?", (entry_id,))
+        before_row = cursor.fetchone()
+        before = dict(before_row) if before_row else None
         cursor.execute("DELETE FROM entries_fts WHERE rowid = ?", (entry_id,))
         cursor.execute("DELETE FROM entries WHERE id = ?", (entry_id,))
+        _audit(conn, 'delete', 'entry', entry_id, actor_id=actor_id, before=before)
         return cursor.rowcount > 0
 
 
@@ -730,10 +851,13 @@ def search_entries(query_text, user_id=None):
 
 # --- Approvals ---
 
-def record_approval(entry_id, approver_id, action, reason=None):
+def record_approval(entry_id, approver_id, action, reason=None, actor_id=None):
     """Record an approval or rejection. Updates entry approval_status."""
     with _connect() as conn:
         cursor = conn.cursor()
+        cursor.execute("SELECT * FROM entries WHERE id = ?", (entry_id,))
+        before_row = cursor.fetchone()
+        before = dict(before_row) if before_row else None
         cursor.execute("""
             INSERT INTO entry_approvals (entry_id, approver_id, action, reason)
             VALUES (?, ?, ?, ?)
@@ -741,6 +865,12 @@ def record_approval(entry_id, approver_id, action, reason=None):
         conn.execute("""
             UPDATE entries SET approval_status = ? WHERE id = ?
         """, (action, entry_id))
+        cursor.execute("SELECT * FROM entries WHERE id = ?", (entry_id,))
+        after_row = cursor.fetchone()
+        after = dict(after_row) if after_row else None
+        _audit(conn, 'update', 'entry', entry_id, actor_id=actor_id or approver_id,
+               before=before, after=after,
+               metadata={'approval_action': action, 'reason': reason, 'approver_id': approver_id})
         return cursor.lastrowid
 
 
@@ -816,14 +946,17 @@ def get_rejected_entries(user_id):
 
 # --- Clients ---
 
-def save_client(name, rate=None, contact_email=None, notes=None):
+def save_client(name, rate=None, contact_email=None, notes=None, actor_id=None):
     with _connect() as conn:
         cursor = conn.cursor()
         cursor.execute("""
             INSERT INTO clients (name, rate, contact_email, notes)
             VALUES (?, ?, ?, ?)
         """, (name, rate, contact_email, notes))
-        return cursor.lastrowid
+        row_id = cursor.lastrowid
+        _audit(conn, 'create', 'client', row_id, actor_id=actor_id,
+               after={'id': row_id, 'name': name, 'rate': rate, 'active': 1})
+        return row_id
 
 
 def get_client(client_id):
@@ -849,24 +982,48 @@ def list_clients():
         return [dict(row) for row in cursor.fetchall()]
 
 
-def rename_client(client_id, new_name):
+def rename_client(client_id, new_name, actor_id=None):
     with _connect() as conn:
         cursor = conn.cursor()
+        cursor.execute("SELECT * FROM clients WHERE id = ?", (client_id,))
+        before_row = cursor.fetchone()
+        before = dict(before_row) if before_row else None
         cursor.execute("UPDATE clients SET name = ? WHERE id = ?", (new_name, client_id))
+        after = dict(before) if before else None
+        if after:
+            after['name'] = new_name
+        _audit(conn, 'update', 'client', client_id, actor_id=actor_id,
+               before=before, after=after)
         return cursor.rowcount > 0
 
 
-def deactivate_client(client_id):
+def deactivate_client(client_id, actor_id=None):
     with _connect() as conn:
         cursor = conn.cursor()
+        cursor.execute("SELECT * FROM clients WHERE id = ?", (client_id,))
+        before_row = cursor.fetchone()
+        before = dict(before_row) if before_row else None
         cursor.execute("UPDATE clients SET active = 0 WHERE id = ?", (client_id,))
+        after = dict(before) if before else None
+        if after:
+            after['active'] = 0
+        _audit(conn, 'update', 'client', client_id, actor_id=actor_id,
+               before=before, after=after)
         return cursor.rowcount > 0
 
 
-def reactivate_client(client_id):
+def reactivate_client(client_id, actor_id=None):
     with _connect() as conn:
         cursor = conn.cursor()
+        cursor.execute("SELECT * FROM clients WHERE id = ?", (client_id,))
+        before_row = cursor.fetchone()
+        before = dict(before_row) if before_row else None
         cursor.execute("UPDATE clients SET active = 1 WHERE id = ?", (client_id,))
+        after = dict(before) if before else None
+        if after:
+            after['active'] = 1
+        _audit(conn, 'update', 'client', client_id, actor_id=actor_id,
+               before=before, after=after)
         return cursor.rowcount > 0
 
 
@@ -880,14 +1037,17 @@ def is_client_active(client_id):
 
 # --- Projects ---
 
-def save_project(name, client_id=None, rate=None, budget_hours=None, notes=None):
+def save_project(name, client_id=None, rate=None, budget_hours=None, notes=None, actor_id=None):
     with _connect() as conn:
         cursor = conn.cursor()
         cursor.execute("""
             INSERT INTO projects (name, client_id, rate, budget_hours, notes)
             VALUES (?, ?, ?, ?, ?)
         """, (name, client_id, rate, budget_hours, notes))
-        return cursor.lastrowid
+        row_id = cursor.lastrowid
+        _audit(conn, 'create', 'project', row_id, actor_id=actor_id,
+               after={'id': row_id, 'name': name, 'client_id': client_id, 'active': 1})
+        return row_id
 
 
 def get_project(project_id):
@@ -931,17 +1091,33 @@ def list_projects(active_only=True):
         return [dict(row) for row in cursor.fetchall()]
 
 
-def deactivate_project(project_id):
+def deactivate_project(project_id, actor_id=None):
     with _connect() as conn:
         cursor = conn.cursor()
+        cursor.execute("SELECT * FROM projects WHERE id = ?", (project_id,))
+        before_row = cursor.fetchone()
+        before = dict(before_row) if before_row else None
         cursor.execute("UPDATE projects SET active = 0 WHERE id = ?", (project_id,))
+        after = dict(before) if before else None
+        if after:
+            after['active'] = 0
+        _audit(conn, 'update', 'project', project_id, actor_id=actor_id,
+               before=before, after=after)
         return cursor.rowcount > 0
 
 
-def reactivate_project(project_id):
+def reactivate_project(project_id, actor_id=None):
     with _connect() as conn:
         cursor = conn.cursor()
+        cursor.execute("SELECT * FROM projects WHERE id = ?", (project_id,))
+        before_row = cursor.fetchone()
+        before = dict(before_row) if before_row else None
         cursor.execute("UPDATE projects SET active = 1 WHERE id = ?", (project_id,))
+        after = dict(before) if before else None
+        if after:
+            after['active'] = 1
+        _audit(conn, 'update', 'project', project_id, actor_id=actor_id,
+               before=before, after=after)
         return cursor.rowcount > 0
 
 

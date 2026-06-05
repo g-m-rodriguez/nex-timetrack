@@ -15,6 +15,7 @@ import json
 import shutil
 import tempfile
 import subprocess
+import sqlite3
 
 import pytest
 
@@ -1773,3 +1774,372 @@ class TestSingleUser:
         # --- Test ---
         r = run("show", "1", expect_exit=0)
         assert "dev" in r.stdout.lower()
+
+
+# ============================================================
+# 26. AUDIT LOG — TST-191 to TST-214
+# ============================================================
+
+def _get_audit(db_dir):
+    """Query audit_log table from the test DB."""
+    db_path = db_dir / "timetrack.db"
+    conn = sqlite3.connect(str(db_path))
+    conn.row_factory = sqlite3.Row
+    rows = conn.execute("SELECT * FROM audit_log ORDER BY id").fetchall()
+    result = [dict(r) for r in rows]
+    conn.close()
+    return result
+
+
+def _setup_full():
+    """Bootstrap: manager + client + project + assignment."""
+    run("user-add", "mm-mgr", "--name", "Manager")
+    run("role-add", "mm-mgr", "manager")
+    run("user-add", "mm-col", "--name", "Collab", "--user", "mm-mgr")
+    run("role-add", "mm-col", "collaborator", "--user", "mm-mgr")
+    run("user-add", "mm-apr", "--name", "Approver", "--user", "mm-mgr")
+    run("role-add", "mm-apr", "approver", "--user", "mm-mgr")
+    run("client-add", "Acme", "--rate", "90", "--user", "mm-mgr")
+    run("project-add", "Web", "--client", "Acme", "--user", "mm-mgr")
+    run("assign", "mm-col", "--client", "Acme", "--project", "Web", "--user", "mm-mgr")
+    run("assign", "mm-apr", "--client", "Acme", "--project", "Web", "--user", "mm-mgr")
+
+
+class TestAuditLog:
+
+    def test_tst_191_audit_user_add_create(self, fresh_db):
+        """TST-191: Audit on user-add (create)."""
+        run("user-add", "mm-alice", "--name", "Alice")
+        audit = _get_audit(fresh_db)
+        assert len(audit) >= 1
+        entry = audit[0]
+        assert entry['action'] == 'create'
+        assert entry['entity_type'] == 'user'
+        assert entry['entity_id'] == 'mm-alice'
+        assert entry['before_json'] is None
+        after = json.loads(entry['after_json'])
+        assert after['name'] == 'Alice'
+
+    def test_tst_192_audit_role_add_create(self, fresh_db):
+        """TST-192: Audit on role-add (create)."""
+        run("user-add", "mm-alice", "--name", "Alice")
+        run("role-add", "mm-alice", "manager")
+        audit = _get_audit(fresh_db)
+        role_entries = [a for a in audit if a['entity_type'] == 'role']
+        assert len(role_entries) == 1
+        e = role_entries[0]
+        assert e['action'] == 'create'
+        assert e['entity_id'] == 'mm-alice:manager'
+        meta = json.loads(e['metadata'])
+        assert meta['role'] == 'manager'
+
+    def test_tst_193_audit_role_remove_delete(self, fresh_db):
+        """TST-193: Audit on role-remove (delete)."""
+        _setup_full()
+        audit_before = len(_get_audit(fresh_db))
+        run("role-remove", "mm-col", "collaborator", "--user", "mm-mgr")
+        audit = _get_audit(fresh_db)
+        new = [a for a in audit[audit_before:] if a['entity_type'] == 'role']
+        assert len(new) == 1
+        assert new[0]['action'] == 'delete'
+        assert new[0]['before_json'] is not None
+
+    def test_tst_194_audit_client_add_create(self, fresh_db):
+        """TST-194: Audit on client-add (create)."""
+        _setup_full()
+        audit = _get_audit(fresh_db)
+        client_entries = [a for a in audit if a['entity_type'] == 'client']
+        assert len(client_entries) == 1
+        e = client_entries[0]
+        assert e['action'] == 'create'
+        after = json.loads(e['after_json'])
+        assert after['name'] == 'Acme'
+        assert e['actor_id'] == 'mm-mgr'
+
+    def test_tst_195_audit_client_rename_update(self, fresh_db):
+        """TST-195: Audit on client-rename (update)."""
+        _setup_full()
+        n = len(_get_audit(fresh_db))
+        run("client-rename", "Acme", "Acme Corp", "--user", "mm-mgr")
+        audit = _get_audit(fresh_db)
+        new = [a for a in audit[n:] if a['entity_type'] == 'client']
+        assert len(new) == 1
+        e = new[0]
+        assert e['action'] == 'update'
+        before = json.loads(e['before_json'])
+        after = json.loads(e['after_json'])
+        assert before['name'] == 'Acme'
+        assert after['name'] == 'Acme Corp'
+
+    def test_tst_196_audit_client_deactivate_update(self, fresh_db):
+        """TST-196: Audit on client-deactivate (update)."""
+        _setup_full()
+        n = len(_get_audit(fresh_db))
+        run("client-deactivate", "Acme", "--confirm", "--user", "mm-mgr")
+        audit = _get_audit(fresh_db)
+        new = [a for a in audit[n:] if a['entity_type'] == 'client']
+        assert len(new) == 1
+        e = new[0]
+        assert e['action'] == 'update'
+        before = json.loads(e['before_json'])
+        after = json.loads(e['after_json'])
+        assert before['active'] == 1
+        assert after['active'] == 0
+
+    def test_tst_197_audit_project_add_create(self, fresh_db):
+        """TST-197: Audit on project-add (create)."""
+        _setup_full()
+        audit = _get_audit(fresh_db)
+        proj = [a for a in audit if a['entity_type'] == 'project']
+        assert len(proj) == 1
+        e = proj[0]
+        assert e['action'] == 'create'
+        after = json.loads(e['after_json'])
+        assert after['name'] == 'Web'
+
+    def test_tst_198_audit_assignment_create_delete(self, fresh_db):
+        """TST-198: Audit on assign/unassign (create/delete)."""
+        _setup_full()
+        audit = _get_audit(fresh_db)
+        assigns = [a for a in audit if a['entity_type'] == 'assignment']
+        assert len(assigns) >= 1
+        assert any(a['action'] == 'create' for a in assigns)
+        n = len(_get_audit(fresh_db))
+        run("unassign", "mm-col", "--client", "Acme", "--project", "Web", "--user", "mm-mgr")
+        audit = _get_audit(fresh_db)
+        new = [a for a in audit[n:] if a['entity_type'] == 'assignment']
+        assert len(new) == 1
+        assert new[0]['action'] == 'delete'
+        assert new[0]['before_json'] is not None
+
+    def test_tst_199_audit_log_entry_create(self, fresh_db):
+        """TST-199: Audit on log entry (create)."""
+        _setup_full()
+        n = len(_get_audit(fresh_db))
+        run("log", "Dev work", "2h", "--client", "Acme", "--project", "Web",
+            "--user", "mm-col")
+        audit = _get_audit(fresh_db)
+        new = [a for a in audit[n:] if a['entity_type'] == 'entry']
+        assert len(new) == 1
+        e = new[0]
+        assert e['action'] == 'create'
+        after = json.loads(e['after_json'])
+        assert after['description'] == 'Dev work'
+        assert e['actor_id'] == 'mm-col'
+
+    def test_tst_200_audit_edit_entry_update(self, fresh_db):
+        """TST-200: Audit on edit entry (update)."""
+        _setup_full()
+        run("log", "Dev work", "2h", "--client", "Acme", "--project", "Web",
+            "--user", "mm-col")
+        n = len(_get_audit(fresh_db))
+        run("edit", "1", "--description", "Updated work", "--user", "mm-col")
+        audit = _get_audit(fresh_db)
+        new = [a for a in audit[n:] if a['entity_type'] == 'entry']
+        assert len(new) == 1
+        e = new[0]
+        assert e['action'] == 'update'
+        before = json.loads(e['before_json'])
+        after = json.loads(e['after_json'])
+        assert before['description'] == 'Dev work'
+        assert after['description'] == 'Updated work'
+
+    def test_tst_201_audit_delete_entry_delete(self, fresh_db):
+        """TST-201: Audit on delete entry (delete)."""
+        _setup_full()
+        run("log", "Dev work", "2h", "--client", "Acme", "--project", "Web",
+            "--user", "mm-col")
+        n = len(_get_audit(fresh_db))
+        run("delete", "1", "--confirm", "--user", "mm-col")
+        audit = _get_audit(fresh_db)
+        new = [a for a in audit[n:] if a['entity_type'] == 'entry']
+        assert len(new) == 1
+        e = new[0]
+        assert e['action'] == 'delete'
+        assert e['before_json'] is not None
+        assert e['after_json'] is None
+
+    def test_tst_202_audit_approve_update(self, fresh_db):
+        """TST-202: Audit on approve (update)."""
+        _setup_full()
+        run("setting-set", "approval_required", "true", "--user", "mm-mgr")
+        run("log", "Dev work", "2h", "--client", "Acme", "--project", "Web",
+            "--user", "mm-col")
+        n = len(_get_audit(fresh_db))
+        run("approve", "1", "--user", "mm-apr")
+        audit = _get_audit(fresh_db)
+        new = [a for a in audit[n:] if a['entity_type'] == 'entry']
+        assert len(new) == 1
+        e = new[0]
+        assert e['action'] == 'update'
+        meta = json.loads(e['metadata'])
+        assert meta['approval_action'] == 'approved'
+
+    def test_tst_203_audit_reject_update(self, fresh_db):
+        """TST-203: Audit on reject (update)."""
+        _setup_full()
+        run("setting-set", "approval_required", "true", "--user", "mm-mgr")
+        run("log", "Dev work", "2h", "--client", "Acme", "--project", "Web",
+            "--user", "mm-col")
+        n = len(_get_audit(fresh_db))
+        run("reject", "1", "--reason", "Bad quality", "--user", "mm-apr")
+        audit = _get_audit(fresh_db)
+        new = [a for a in audit[n:] if a['entity_type'] == 'entry']
+        assert len(new) == 1
+        e = new[0]
+        assert e['action'] == 'update'
+        meta = json.loads(e['metadata'])
+        assert meta['approval_action'] == 'rejected'
+        assert meta['reason'] == 'Bad quality'
+
+    def test_tst_204_audit_setting_create(self, fresh_db):
+        """TST-204: Audit on setting-set for new setting (create)."""
+        _setup_full()
+        n = len(_get_audit(fresh_db))
+        run("setting-set", "custom_flag", "enabled", "--user", "mm-mgr")
+        audit = _get_audit(fresh_db)
+        new = [a for a in audit[n:] if a['entity_type'] == 'setting']
+        assert len(new) == 1
+        e = new[0]
+        assert e['action'] == 'create'
+        assert e['before_json'] is None
+        after = json.loads(e['after_json'])
+        assert after['value'] == 'enabled'
+
+    def test_tst_205_audit_setting_update(self, fresh_db):
+        """TST-205: Audit on setting-set for existing setting (update)."""
+        _setup_full()
+        run("setting-set", "custom_flag", "v1", "--user", "mm-mgr")
+        n = len(_get_audit(fresh_db))
+        run("setting-set", "custom_flag", "v2", "--user", "mm-mgr")
+        audit = _get_audit(fresh_db)
+        new = [a for a in audit[n:] if a['entity_type'] == 'setting']
+        assert len(new) == 1
+        e = new[0]
+        assert e['action'] == 'update'
+        before = json.loads(e['before_json'])
+        after = json.loads(e['after_json'])
+        assert before['value'] == 'v1'
+        assert after['value'] == 'v2'
+
+    def test_tst_206_audit_category_add_create(self, fresh_db):
+        """TST-206: Audit on category-add (create)."""
+        _setup_full()
+        n = len(_get_audit(fresh_db))
+        run("category-add", "qa-testing", "--user", "mm-mgr")
+        audit = _get_audit(fresh_db)
+        new = [a for a in audit[n:] if a['entity_type'] == 'category']
+        assert len(new) == 1
+        assert new[0]['action'] == 'create'
+        after = json.loads(new[0]['after_json'])
+        assert after['name'] == 'qa-testing'
+
+    def test_tst_207_audit_category_remove_update(self, fresh_db):
+        """TST-207: Audit on category-remove (update)."""
+        _setup_full()
+        run("category-add", "qa-testing", "--user", "mm-mgr")
+        n = len(_get_audit(fresh_db))
+        run("category-remove", "qa-testing", "--user", "mm-mgr")
+        audit = _get_audit(fresh_db)
+        new = [a for a in audit[n:] if a['entity_type'] == 'category']
+        assert len(new) == 1
+        e = new[0]
+        assert e['action'] == 'update'
+        before = json.loads(e['before_json'])
+        after = json.loads(e['after_json'])
+        assert before['active'] == 1
+        assert after['active'] == 0
+
+    def test_tst_208_audit_user_deactivate_update(self, fresh_db):
+        """TST-208: Audit on user-deactivate (update)."""
+        _setup_full()
+        n = len(_get_audit(fresh_db))
+        run("user-deactivate", "mm-col", "--confirm", "--user", "mm-mgr")
+        audit = _get_audit(fresh_db)
+        new = [a for a in audit[n:] if a['entity_type'] == 'user']
+        assert len(new) == 1
+        e = new[0]
+        assert e['action'] == 'update'
+        before = json.loads(e['before_json'])
+        after = json.loads(e['after_json'])
+        assert before['active'] == 1
+        assert after['active'] == 0
+
+    def test_tst_209_audit_actor_id_correct(self, fresh_db):
+        """TST-209: Audit actor_id matches manager who executed."""
+        _setup_full()
+        audit = _get_audit(fresh_db)
+        mgr_actions = [a for a in audit if a['actor_id'] == 'mm-mgr']
+        assert len(mgr_actions) > 0
+
+    def test_tst_210_audit_actor_id_null_bootstrap(self, fresh_db):
+        """TST-210: Audit actor_id NULL in bootstrap (first user-add)."""
+        run("user-add", "mm-first", "--name", "First")
+        audit = _get_audit(fresh_db)
+        assert len(audit) >= 1
+        e = audit[0]
+        assert e['action'] == 'create'
+        assert e['entity_type'] == 'user'
+        assert e['actor_id'] is None
+
+    def test_tst_211_readonly_no_audit(self, fresh_db):
+        """TST-211: Read-only commands do not generate audit entries."""
+        _setup_full()
+        run("log", "Work", "2h", "--client", "Acme", "--project", "Web",
+            "--user", "mm-col")
+        n = len(_get_audit(fresh_db))
+        run("show", "1", "--user", "mm-col")
+        run("list", "--user", "mm-col")
+        run("clients")
+        run("projects")
+        run("settings")
+        run("categories")
+        audit_after = _get_audit(fresh_db)
+        assert len(audit_after) == n, "Read-only commands should not create audit entries"
+
+    def test_tst_212_audit_timestamp_populated(self, fresh_db):
+        """TST-212: Audit timestamps are populated and valid ISO format."""
+        _setup_full()
+        audit = _get_audit(fresh_db)
+        assert len(audit) > 0
+        for a in audit:
+            assert a['timestamp'] is not None
+            assert 'T' in a['timestamp'] or '-' in a['timestamp']
+
+    def test_tst_213_audit_client_reactivate_update(self, fresh_db):
+        """TST-213: Audit on client-reactivate (update)."""
+        _setup_full()
+        run("client-deactivate", "Acme", "--confirm", "--user", "mm-mgr")
+        n = len(_get_audit(fresh_db))
+        run("client-reactivate", "Acme", "--user", "mm-mgr")
+        audit = _get_audit(fresh_db)
+        new = [a for a in audit[n:] if a['entity_type'] == 'client']
+        assert len(new) == 1
+        e = new[0]
+        assert e['action'] == 'update'
+        before = json.loads(e['before_json'])
+        after = json.loads(e['after_json'])
+        assert before['active'] == 0
+        assert after['active'] == 1
+
+    def test_tst_214_audit_project_deactivate_reactivate(self, fresh_db):
+        """TST-214: Audit on project-deactivate/reactivate (update)."""
+        _setup_full()
+        n = len(_get_audit(fresh_db))
+        run("project-deactivate", "Web", "--confirm", "--user", "mm-mgr")
+        audit = _get_audit(fresh_db)
+        deact = [a for a in audit[n:] if a['entity_type'] == 'project']
+        assert len(deact) == 1
+        before = json.loads(deact[0]['before_json'])
+        after = json.loads(deact[0]['after_json'])
+        assert before['active'] == 1
+        assert after['active'] == 0
+        n2 = len(audit)
+        run("project-reactivate", "Web", "--user", "mm-mgr")
+        audit2 = _get_audit(fresh_db)
+        react = [a for a in audit2[n2:] if a['entity_type'] == 'project']
+        assert len(react) == 1
+        before2 = json.loads(react[0]['before_json'])
+        after2 = json.loads(react[0]['after_json'])
+        assert before2['active'] == 0
+        assert after2['active'] == 1
