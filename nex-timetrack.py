@@ -812,7 +812,9 @@ def cmd_pending(args):
         desc = e['description'][:29]
         client = (e.get('client_name') or '')[:15]
         project = (e.get('project_name') or '')[:15]
-        owner = (e.get('user_id') or '')[:12]
+        owner_id = e.get('user_id') or ''
+        owner_user = get_user(owner_id)
+        owner = (owner_user['name'][:12] if owner_user else 'unknown')
         total_mins += e['duration_minutes'] or 0
         if args.user:
             print(f"{eid:<5} {date:<12} {dur:<10} {desc:<30} {client:<16} {project:<16}")
@@ -893,7 +895,11 @@ def cmd_rejections(args):
         # Get latest rejection reason
         history = get_approval_history(eid)
         reason = history[0].get('reason', 'No reason') if history else 'No reason'
-        approver = history[0].get('approver_id', 'unknown') if history else 'unknown'
+        if history and history[0].get('approver_id'):
+            approver_user = get_user(history[0]['approver_id'])
+            approver = approver_user['name'][:12] if approver_user else 'unknown'
+        else:
+            approver = 'unknown'
         print(f"{eid:<5} {date:<12} {desc:<36} {approver:<13} {reason}")
 
     print(f"\nTotal: {len(entries)} rejected entry(ies)")
@@ -918,7 +924,7 @@ def cmd_approval_history(args):
     else:
         for h in history:
             action = h['action']
-            approver = h.get('approver_name') or h['approver_id']
+            approver = h.get('approver_name') or 'unknown'
             timestamp = h.get('approved_at', '')
             reason = h.get('reason', '')
             line = f"  {timestamp}  {action:<10} by {approver}"
@@ -1074,7 +1080,7 @@ def cmd_user_add(args):
             sys.exit(1)
 
     save_user(args.user_id, args.name)
-    print(f"User added: {args.name} ({args.user_id})")
+    print(f"User added: {args.name}")
     print(FOOTER)
 
 
@@ -1097,20 +1103,12 @@ def cmd_user_list(args):
 
     is_manager = 'manager' in get_roles(user_id)
 
-    if is_manager:
-        print(f"\n{'User ID':<20} {'Name':<25} {'Active':<8} {'Roles':<30}")
-        print("-" * 83)
-        for u in users:
-            roles = ', '.join(sorted(get_roles(u['user_id'])))
-            active = "yes" if u['active'] else "no"
-            print(f"{u['user_id']:<20} {u['name'][:24]:<25} {active:<8} {roles:<30}")
-    else:
-        print(f"\n{'Name':<25} {'Active':<8} {'Roles':<30}")
-        print("-" * 63)
-        for u in users:
-            roles = ', '.join(sorted(get_roles(u['user_id'])))
-            active = "yes" if u['active'] else "no"
-            print(f"{u['name'][:24]:<25} {active:<8} {roles:<30}")
+    print(f"\n{'Name':<25} {'Active':<8} {'Roles':<30}")
+    print("-" * 63)
+    for u in users:
+        roles = ', '.join(sorted(get_roles(u['user_id'])))
+        active = "yes" if u['active'] else "no"
+        print(f"{u['name'][:24]:<25} {active:<8} {roles:<30}")
 
     print(f"\nTotal: {len(users)} users")
     print(FOOTER)
@@ -1128,18 +1126,18 @@ def cmd_user_deactivate(args):
 
     target = get_user(args.user_id)
     if not target:
-        print(f"User '{args.user_id}' not found.")
+        print(f"User not found.")
         print(FOOTER)
         return
 
     if not args.confirm:
-        print(f"Deactivate user '{target['name']}' ({args.user_id})?")
+        print(f"Deactivate user '{target['name']}'?")
         print(f"Run again with --confirm to deactivate.")
         print(FOOTER)
         return
 
     deactivate_user(args.user_id)
-    print(f"User '{target['name']}' ({args.user_id}) deactivated.")
+    print(f"User '{target['name']}' deactivated.")
     print(FOOTER)
 
 
@@ -1156,7 +1154,9 @@ def cmd_role_add(args):
             sys.exit(1)
 
     add_role(args.user_id, args.role)
-    print(f"Role '{args.role}' added to {args.user_id}")
+    target = get_user(args.user_id)
+    target_name = target['name'] if target else args.user_id
+    print(f"Role '{args.role}' added to {target_name}")
     print(FOOTER)
 
 
@@ -1171,7 +1171,9 @@ def cmd_role_remove(args):
         sys.exit(1)
 
     remove_role(args.user_id, args.role)
-    print(f"Role '{args.role}' removed from {args.user_id}")
+    target = get_user(args.user_id)
+    target_name = target['name'] if target else args.user_id
+    print(f"Role '{args.role}' removed from {target_name}")
     print(FOOTER)
 
 
@@ -1192,7 +1194,9 @@ def cmd_assign(args):
     project_id = _resolve_project(args.project) if args.project else None
 
     add_assignment(args.user_id, client_id, project_id)
-    print(f"Assigned {args.user_id} to {args.client}", end="")
+    target = get_user(args.user_id)
+    target_name = target['name'] if target else args.user_id
+    print(f"Assigned {target_name} to {args.client}", end="")
     if args.project:
         print(f" / {args.project}", end="")
     print()
@@ -1213,7 +1217,9 @@ def cmd_unassign(args):
     project_id = _resolve_project(args.project) if args.project else None
 
     remove_assignment(args.user_id, client_id, project_id)
-    print(f"Unassigned {args.user_id} from {args.client}", end="")
+    target = get_user(args.user_id)
+    target_name = target['name'] if target else args.user_id
+    print(f"Unassigned {target_name} from {args.client}", end="")
     if args.project:
         print(f" / {args.project}", end="")
     print()
@@ -1235,7 +1241,7 @@ def cmd_assignments(args):
     print("-" * 65)
 
     for a in assignments:
-        user = a.get('user_name', a['user_id'])
+        user = a.get('user_name', 'unknown')
         client = (a.get('client_name') or "")[:19]
         project = (a.get('project_name') or "* (all)")[:24]
         print(f"{user:<20} {client:<20} {project:<25}")
