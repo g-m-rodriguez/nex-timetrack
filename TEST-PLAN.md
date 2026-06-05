@@ -417,6 +417,16 @@ Todos los casos de uso válidos e inválidos, codificados TST-XXX para automatiz
 
 ---
 
+## 27. Me command
+
+| ID | Tipo | Descripción | Qué verifica |
+|----|------|-------------|--------------|
+| TST-215 | ✅ | me con usuario válido | Retorna el nombre del usuario |
+| TST-216 | ❌ | me sin --user en multi-user | Error: user required |
+| TST-217 | ❌ | me con usuario inexistente | Retorna "User not found." |
+
+---
+
 ## Resumen
 
 | Dominio | Casos | Válidos | Inválidos |
@@ -448,4 +458,5 @@ Todos los casos de uso válidos e inválidos, codificados TST-XXX para automatiz
 | Timer deprecation | 4 | 4 | 0 |
 | Duration parsing | 5 | 5 | 0 |
 | Audit Log | 24 | 24 | 0 |
-| **Total** | **218** | **151** | **67** |
+| Me command | 3 | 1 | 2 |
+| **Total** | **221** | **152** | **69** |

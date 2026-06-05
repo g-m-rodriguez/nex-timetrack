@@ -135,6 +135,7 @@ nex-timetrack log "Task" 2h --client "Acme" --project "Web" --external-id "JIRA-
 | `categories` | List categories |
 | `category-add` | Add a category (manager only) |
 | `category-remove` | Deactivate a category (manager only) |
+| `me` | Show your name (requires `--user`) |
 
 ### Reporting & Export
 

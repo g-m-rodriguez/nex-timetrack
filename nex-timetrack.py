@@ -1335,6 +1335,22 @@ def cmd_categories(args):
     print(FOOTER)
 
 
+def cmd_me(args):
+    init_db()
+    user_id = _resolve_user_id(args)
+    if not user_id:
+        print("No user specified.")
+        print(FOOTER)
+        return
+    user = get_user(user_id)
+    if not user:
+        print(f"User not found.")
+        print(FOOTER)
+        return
+    print(user['name'])
+    print(FOOTER)
+
+
 # --- Main ---
 
 def main():
@@ -1647,6 +1663,11 @@ def main():
     # CATEGORIES
     p = subparsers.add_parser('categories', help='List categories')
     p.set_defaults(func=cmd_categories)
+
+    # ME
+    p = subparsers.add_parser('me', help='Show your name')
+    add_user_arg(p)
+    p.set_defaults(func=cmd_me)
 
     args = parser.parse_args()
 

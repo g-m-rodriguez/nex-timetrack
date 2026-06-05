@@ -2143,3 +2143,32 @@ class TestAuditLog:
         after2 = json.loads(react[0]['after_json'])
         assert before2['active'] == 0
         assert after2['active'] == 1
+
+
+# ============================================================
+# 27. ME COMMAND — TST-215 to TST-217
+# ============================================================
+
+class TestMe:
+
+    def test_tst_215_me_valid_user(self, fresh_db):
+        """TST-215: me returns user name."""
+        run("user-add", "mm-alice", "--name", "Alice Manager")
+        run("role-add", "mm-alice", "manager")
+        r = run("me", "--user", "mm-alice")
+        assert "Alice Manager" in r.stdout
+
+    def test_tst_216_me_no_user_multiuser(self, fresh_db):
+        """TST-216: me without --user in multi-user mode errors."""
+        run("user-add", "mm-alice", "--name", "Alice")
+        run("role-add", "mm-alice", "manager")
+        r = run("me", expect_exit=1)
+        output = (r.stdout + r.stderr).lower()
+        assert "user" in output or "required" in output
+
+    def test_tst_217_me_unknown_user(self, fresh_db):
+        """TST-217: me with unknown user returns not found."""
+        run("user-add", "mm-alice", "--name", "Alice")
+        run("role-add", "mm-alice", "manager")
+        r = run("me", "--user", "mm-nobody", expect_exit=0)
+        assert "not found" in r.stdout.lower()
